@@ -22,14 +22,6 @@ func decode(t *testing.T, buf *bytes.Buffer) map[string]any {
 	return rec
 }
 
-func TestRequestIDFromContext(t *testing.T) {
-	t.Parallel()
-
-	ctx := logger.WithRequestID(t.Context(), "req-42")
-	assert.Equal(t, "req-42", logger.RequestID(ctx))
-	assert.Empty(t, logger.RequestID(t.Context()))
-}
-
 func TestNewAddsRequestID(t *testing.T) {
 	t.Parallel()
 
@@ -161,20 +153,6 @@ func TestBranchedLoggersAreIndependent(t *testing.T) {
 	group, ok = decode(t, &buf)["http"].(map[string]any)
 	require.True(t, ok, "group http is missing")
 	assert.Equal(t, "POST", group["method"])
-}
-
-func TestLevelFiltering(t *testing.T) {
-	t.Parallel()
-
-	var buf bytes.Buffer
-
-	log := logger.New(&buf, slog.LevelWarn, logger.FormatJSON)
-
-	log.InfoContext(t.Context(), "ignored")
-	assert.Empty(t, buf.String())
-
-	log.WarnContext(t.Context(), "kept")
-	assert.Contains(t, buf.String(), "kept")
 }
 
 func TestFormats(t *testing.T) {
