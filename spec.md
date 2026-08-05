@@ -10,7 +10,7 @@
 | Решение | Выбор | Обоснование |
 |---|---|---|
 | Язык | Go 1.25+ | — |
-| HTTP-роутер | Chi | хендлеры остаются `http.HandlerFunc`, тестируются через `httptest` |
+| HTTP-роутер | Chi | группы `/api/v1` и `/web` с разными наборами middleware; хендлеры остаются `http.HandlerFunc` и тестируются через `httptest` |
 | БД метаданных | PostgreSQL 16 | — |
 | Драйвер БД | `jackc/pgx/v5` | — |
 | Файловое хранилище | MinIO (S3 API), клиент `minio-go/v7` | локально в Docker, совместимо с AWS S3 |
@@ -18,6 +18,7 @@
 | Обработка изображений | `disintegration/imaging` | даёт `imaging.Fill` — центрированный кроп в квадрат |
 | Декодирование WebP | `golang.org/x/image/webp` | — |
 | Миграции | `pressly/goose/v3` + `embed.FS` | — |
+| Тесты | `stretchr/testify` (+ `suite` для интеграционных), `testcontainers-go` | — |
 | Деплой | Docker Compose (спринт 1), Kubernetes (позже) | |
 
 ## 3. Компоненты
@@ -28,6 +29,38 @@
 - **PostgreSQL** — метаданные аватарок.
 - **MinIO** — оригиналы и миниатюры.
 - **RabbitMQ** — очередь событий обработки/удаления.
+
+### 3.1 Структура репозитория
+
+```
+cmd/
+  server/                       # main API-сервера и веб-интерфейса
+  worker/                       # main обработчика событий
+  migrator/                     # применяет миграции и выходит
+internal/
+  domain/                       # модели, статусы, доменные ошибки; без импортов инфраструктуры
+  config/                       # одна структура конфига, LoadServer/LoadWorker
+  logger/                       # slog, request_id из контекста
+  buildinfo/                    # версия и дата сборки (ldflags)
+  imageproc/                    # magic bytes, лимит пикселей, ресайз миниатюр
+    testdata/                   # фикстуры: валидные, битые, «бомба», анимированный webp
+  repository/postgres/          # метаданные аватарок
+  storage/s3/                   # MinIO: оригиналы и миниатюры
+  broker/                       # RabbitMQ: топология, publisher, consumer, разбор x-death
+  migrate/                      # goose + embed.FS
+  placeholder/                  # заглушка default.png в embed.FS + её ETag
+  server/
+    service/                    # сценарии загрузки, раздачи, удаления
+    http/                       # роутер, middleware, хендлеры, маппинг ошибок в статусы
+    web/                        # html/template + статика в embed.FS
+  worker/
+    handler/                    # обработчики avatar.uploaded / avatar.deleted
+    reconciler/                 # добор зависших загрузок (§6.3)
+migrations/                     # SQL-миграции goose
+build/                          # Dockerfile.server, Dockerfile.worker, Dockerfile.migrator
+docker-compose.yml
+spec.md                         # этот документ
+```
 
 ## 4. REST API
 
@@ -51,6 +84,9 @@ Body:     multipart/form-data, поле file (required, max 10MB)
 400 → { "error": "Invalid file format", "details": "Supported formats: jpeg, png, webp" }
 413 → { "error": "File too large", "max_size": 10485760 }
 ```
+
+Поле формы называется `file`. Дополнительно принимается `image`. 
+`file` имеет приоритет, если присутствуют оба.
 
 Валидация, по порядку:
 
@@ -145,12 +181,12 @@ GET /health
 ### 4.6 Веб-интерфейс
 
 ```
-GET  /web/upload            — форма загрузки (превью, drag&drop — опционально)
-POST /web/upload            — обработка загрузки
+GET  /web/upload            — форма загрузки с превью
+POST /web/upload            — обработка загрузки, редирект на галерею
 GET  /web/gallery/{user_id} — галерея аватарок
 ```
 
-Свой минимальный фронтенд на `html/template`, шаблоны и статика через `embed.FS`, без JS-сборки.
+Свой фронтенд на `html/template`, шаблоны и статика через `embed.FS`, без JS-сборки.
 
 ## 5. Модель данных
 
@@ -248,10 +284,12 @@ INSERT (upload_status='uploading') → PUT в S3 → UPDATE 'uploaded' → publi
 
 ## 7. Нефункциональные требования
 
-- Покрытие unit-тестами > 50%.
+- Покрытие unit-тестами > 50%. Обязательные к покрытию области: HTTP-хендлеры,
+  сервисный слой, репозитории, утилиты обработки изображений.
 - `golangci-lint` без ошибок.
 - Docker Compose поднимает всё окружение одной командой.
 - Секреты — только через env.
+- Образы собираются многостадийно, с `CGO_ENABLED=0`, и запускаются не от root.
 
 ## 8. Бонус (безопасность, если успеем)
 
