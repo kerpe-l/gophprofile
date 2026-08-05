@@ -196,6 +196,13 @@ func LoadWorker() (*Config, error) {
 	return loadWorker(os.Getenv)
 }
 
+// LoadMigrator загружает конфигурацию мигратора.
+// Проверяются только App и DB: мигратор применяет схему и выходит, ни
+// хранилища, ни брокера, ни HTTP-порта ему не нужно.
+func LoadMigrator() (*Config, error) {
+	return loadMigrator(os.Getenv)
+}
+
 func loadServer(env getenv) (*Config, error) {
 	cfg, err := load(env)
 	if err != nil {
@@ -237,8 +244,24 @@ func loadWorker(env getenv) (*Config, error) {
 	return cfg, nil
 }
 
-// load читает все секции. Ошибки разбора значений копятся и возвращаются
-// разом: иначе исправление опечаток в env превращается в серию рестартов.
+func loadMigrator(env getenv) (*Config, error) {
+	cfg, err := load(env)
+	if err != nil {
+		return nil, err
+	}
+
+	err = errors.Join(
+		cfg.App.validate(),
+		cfg.DB.validate(),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("invalid migrator configuration: %w", err)
+	}
+
+	return cfg, nil
+}
+
+// load читает все секции. Ошибки разбора значений копятся и возвращаются разом.
 func load(env getenv) (*Config, error) {
 	r := reader{env: env}
 

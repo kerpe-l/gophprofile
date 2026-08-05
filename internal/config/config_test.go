@@ -146,3 +146,24 @@ func TestLoadWorkerMissingSecrets(t *testing.T) {
 	require.ErrorContains(t, err, envDatabaseDSN+" is required")
 	require.ErrorContains(t, err, envAMQPURL+" is required")
 }
+
+// Мигратору хватает одного DSN: ни хранилище, ни брокер ему не нужны.
+func TestLoadMigratorNeedsOnlyDatabase(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := loadMigrator(mapEnv(map[string]string{
+		envDatabaseDSN: "postgres://user:pass@localhost:5432/gophprofile?sslmode=disable",
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, defaultDBQueryTimeout, cfg.DB.QueryTimeout)
+}
+
+func TestLoadMigratorMissingDSN(t *testing.T) {
+	t.Parallel()
+
+	env := requiredEnv()
+	delete(env, envDatabaseDSN)
+
+	_, err := loadMigrator(mapEnv(env))
+	require.ErrorContains(t, err, envDatabaseDSN+" is required")
+}
