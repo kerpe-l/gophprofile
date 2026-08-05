@@ -16,4 +16,6 @@ var (
 	ErrTooLarge = errors.New("file too large")
 	// ErrImageTooBig — число пикселей изображения превышает допустимое.
 	ErrImageTooBig = errors.New("image is too large to process")
+	// ErrUnsupportedSize — запрошен размер, в котором миниатюры не создаются.
+	ErrUnsupportedSize = errors.New("unsupported size")
 )
