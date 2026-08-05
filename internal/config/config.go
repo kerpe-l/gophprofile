@@ -41,6 +41,7 @@ const (
 	envS3AccessKey = "S3_ACCESS_KEY"
 	envS3SecretKey = "S3_SECRET_KEY" //nolint:gosec // имя переменной окружения, а не значение секрета
 	envS3Bucket    = "S3_BUCKET"
+	envS3Region    = "S3_REGION"
 	envS3UseSSL    = "S3_USE_SSL"
 	envS3Timeout   = "S3_TIMEOUT"
 
@@ -75,7 +76,9 @@ const (
 	defaultDBMaxConns     = 10
 	defaultDBQueryTimeout = 5 * time.Second
 
-	defaultS3Bucket  = "avatars"
+	defaultS3Bucket = "avatars"
+	// Регион по умолчанию — тот, который MinIO принимает без настройки;
+	defaultS3Region  = "us-east-1"
 	defaultS3UseSSL  = false
 	defaultS3Timeout = 15 * time.Second
 
@@ -155,6 +158,8 @@ type S3 struct {
 	SecretKey string
 	// Bucket — бакет для оригиналов и миниатюр.
 	Bucket string
+	// Region — регион хранилища; участвует в подписи запросов.
+	Region string
 	// UseSSL — обращаться к хранилищу по HTTPS.
 	UseSSL bool
 	// Timeout — предел на одну операцию с хранилищем.
@@ -291,6 +296,7 @@ func load(env getenv) (*Config, error) {
 			AccessKey: r.str(envS3AccessKey, ""),
 			SecretKey: r.str(envS3SecretKey, ""),
 			Bucket:    r.str(envS3Bucket, defaultS3Bucket),
+			Region:    r.str(envS3Region, defaultS3Region),
 			UseSSL:    r.boolean(envS3UseSSL, defaultS3UseSSL),
 			Timeout:   r.duration(envS3Timeout, defaultS3Timeout),
 		},
@@ -357,6 +363,7 @@ func (c S3) validate() error {
 		required(envS3AccessKey, c.AccessKey),
 		required(envS3SecretKey, c.SecretKey),
 		required(envS3Bucket, c.Bucket),
+		required(envS3Region, c.Region),
 		positiveDuration(envS3Timeout, c.Timeout),
 	)
 }
