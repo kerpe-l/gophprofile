@@ -59,16 +59,27 @@ const (
 		ORDER BY updated_at
 		LIMIT $4`
 
+	// Переводы статусов отбирают строку ещё и по текущему статусу: список
+	// разрешённых исходных статусов приходит параметром из домена. Проверять
+	// его отдельным чтением перед UPDATE нельзя — между чтением и записью
+	// статус успевает сменить другой процесс.
 	setUploadStatusQuery = `
 		UPDATE avatars SET upload_status = $2, updated_at = NOW()
-		WHERE id = $1 AND deleted_at IS NULL`
+		WHERE id = $1 AND deleted_at IS NULL AND upload_status = ANY($3)`
 
 	setProcessingStatusQuery = `
 		UPDATE avatars SET processing_status = $2, updated_at = NOW()
-		WHERE id = $1 AND deleted_at IS NULL`
+		WHERE id = $1 AND deleted_at IS NULL AND processing_status = ANY($3)`
 
 	completeProcessingQuery = `
 		UPDATE avatars SET thumbnail_s3_keys = $2, processing_status = $3, updated_at = NOW()
+		WHERE id = $1 AND deleted_at IS NULL AND processing_status = ANY($4)`
+
+	// Уточняет причину, по которой перевод статуса не затронул ни одной
+	// строки: живая запись есть — значит, дело в запрещённом переходе.
+	avatarExistsQuery = `
+		SELECT true
+		FROM avatars
 		WHERE id = $1 AND deleted_at IS NULL`
 
 	incrementRetryQuery = `
@@ -124,19 +135,28 @@ func (r *Repository) ListByUser(ctx context.Context, userID string) iter.Seq2[do
 
 // SelectStuck перебирает аватары, оригинал которых загружен, а обработка
 // не начиналась, и которые не менялись до момента before, — не более limit штук.
+// Неположительный limit — ошибка: выборка без предела способна вычитать таблицу
+// целиком, а нулевая порция означает, что вызывающий ошибся в расчёте размера.
 //
 // Момент отсечки задаёт вызывающий: часы принадлежат ему, иначе такой перебор
 // нельзя проверить тестом без ожидания реального времени.
 func (r *Repository) SelectStuck(
 	ctx context.Context, before time.Time, limit int,
 ) iter.Seq2[domain.Avatar, error] {
+	if limit <= 0 {
+		return failedSeq(fmt.Errorf("select stuck avatars: limit %d is not positive", limit))
+	}
+
 	return r.queryMany(ctx, "select stuck avatars", selectStuckQuery,
 		domain.UploadStatusUploaded, domain.ProcessingStatusPending, before, limit)
 }
 
 // SetUploadStatus переводит запись в новое состояние загрузки оригинала.
+// Запрещённый переход — domain.ErrInvalidTransition, отсутствие живой
+// записи — domain.ErrNotFound.
 func (r *Repository) SetUploadStatus(ctx context.Context, id uuid.UUID, status domain.UploadStatus) error {
-	if err := r.exec(ctx, setUploadStatusQuery, id, status); err != nil {
+	err := r.execTransition(ctx, id, setUploadStatusQuery, id, status, statusStrings(status.AllowedFrom()))
+	if err != nil {
 		return fmt.Errorf("set upload status %s of avatar %s: %w", status, id, err)
 	}
 
@@ -144,8 +164,11 @@ func (r *Repository) SetUploadStatus(ctx context.Context, id uuid.UUID, status d
 }
 
 // SetProcessingStatus переводит запись в новое состояние обработки.
+// Запрещённый переход — domain.ErrInvalidTransition, отсутствие живой
+// записи — domain.ErrNotFound.
 func (r *Repository) SetProcessingStatus(ctx context.Context, id uuid.UUID, status domain.ProcessingStatus) error {
-	if err := r.exec(ctx, setProcessingStatusQuery, id, status); err != nil {
+	err := r.execTransition(ctx, id, setProcessingStatusQuery, id, status, statusStrings(status.AllowedFrom()))
+	if err != nil {
 		return fmt.Errorf("set processing status %s of avatar %s: %w", status, id, err)
 	}
 
@@ -153,6 +176,8 @@ func (r *Repository) SetProcessingStatus(ctx context.Context, id uuid.UUID, stat
 }
 
 // CompleteProcessing сохраняет ключи готовых миниатюр и завершает обработку.
+// Завершить можно только начатую обработку: для записи в другом статусе —
+// domain.ErrInvalidTransition.
 //
 // Ключи и статус пишутся одним запросом: двумя падение между ними оставило бы
 // completed без ключей — состояние, в котором раздача миниатюр уже разрешена,
@@ -160,7 +185,10 @@ func (r *Repository) SetProcessingStatus(ctx context.Context, id uuid.UUID, stat
 func (r *Repository) CompleteProcessing(
 	ctx context.Context, id uuid.UUID, thumbnails map[domain.ThumbnailSize]string,
 ) error {
-	err := r.exec(ctx, completeProcessingQuery, id, thumbnails, domain.ProcessingStatusCompleted)
+	const status = domain.ProcessingStatusCompleted
+
+	err := r.execTransition(ctx, id, completeProcessingQuery,
+		id, thumbnails, status, statusStrings(status.AllowedFrom()))
 	if err != nil {
 		return fmt.Errorf("complete processing of avatar %s: %w", id, err)
 	}
@@ -191,6 +219,18 @@ func (r *Repository) SoftDelete(ctx context.Context, id uuid.UUID) error {
 	}
 
 	return nil
+}
+
+// statusStrings переводит статусы в срез строк: в ANY(...) массив уходит
+// как text[], и полагаться на то, что драйвер сам развернёт срез именованного
+// строкового типа, незачем.
+func statusStrings[S ~string](statuses []S) []string {
+	out := make([]string, len(statuses))
+	for i, status := range statuses {
+		out[i] = string(status)
+	}
+
+	return out
 }
 
 // scanAvatar читает одну строку в модель. Принимает pgx.Row, поэтому годится

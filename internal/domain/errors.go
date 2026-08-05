@@ -10,6 +10,9 @@ var (
 	ErrNotFound = errors.New("avatar not found")
 	// ErrForbidden — попытка удалить чужой аватар.
 	ErrForbidden = errors.New("forbidden")
+	// ErrInvalidTransition — запись жива, но перевести её в запрошенный
+	// статус из текущего нельзя.
+	ErrInvalidTransition = errors.New("invalid status transition")
 	// ErrUnsupportedFormat — формат файла не входит в число поддерживаемых.
 	ErrUnsupportedFormat = errors.New("unsupported image format")
 	// ErrTooLarge — размер файла превышает допустимый.

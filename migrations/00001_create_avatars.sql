@@ -24,7 +24,12 @@ CREATE INDEX idx_avatars_user_id ON avatars(user_id) WHERE deleted_at IS NULL;
 -- Ни один запрос API этим индексом не пользуется: он существует ради
 -- добора зависших загрузок — записей в состоянии uploaded + pending,
 -- по которым событие в брокер так и не ушло.
-CREATE INDEX idx_avatars_status ON avatars(upload_status, processing_status);
+--
+-- updated_at — третьей колонкой: по нему идёт и отсечка «старше пяти минут»,
+-- и упорядочивание выборки, а без него база сортирует отобранное отдельным
+-- шагом. Удалённые записи в добор не попадают никогда, поэтому индекс частичный.
+CREATE INDEX idx_avatars_status ON avatars(upload_status, processing_status, updated_at)
+    WHERE deleted_at IS NULL;
 
 -- +goose Down
 DROP TABLE avatars;

@@ -15,6 +15,7 @@ import (
 	"math"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -110,6 +111,42 @@ func (r *Repository) exec(ctx context.Context, query string, args ...any) error 
 	return nil
 }
 
+// execTransition выполняет перевод статуса: запрос обязан отбирать строку
+// не только по идентификатору, но и по списку разрешённых исходных статусов.
+// Ноль затронутых строк означает либо запрещённый переход, либо отсутствие
+// живой записи, и эти случаи различаются отдельно.
+func (r *Repository) execTransition(ctx context.Context, id uuid.UUID, query string, args ...any) error {
+	err := r.exec(ctx, query, args...)
+	if !errors.Is(err, domain.ErrNotFound) {
+		return err
+	}
+
+	return r.transitionError(ctx, id)
+}
+
+// transitionError называет причину, по которой перевод статуса не затронул
+// ни одной строки. Второе чтение идёт только по ветке отказа и ни на что
+// не влияет: решение уже принято базой, а гонка с удалением записи между
+// двумя запросами меняет domain.ErrInvalidTransition на domain.ErrNotFound —
+// на тот ответ, который к этому моменту и стал верным.
+func (r *Repository) transitionError(ctx context.Context, id uuid.UUID) error {
+	ctx, cancel := r.withDeadline(ctx)
+	defer cancel()
+
+	var alive bool
+
+	err := r.pool.QueryRow(ctx, avatarExistsQuery, id).Scan(&alive)
+
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return domain.ErrNotFound
+	case err != nil:
+		return err
+	default:
+		return domain.ErrInvalidTransition
+	}
+}
+
 // queryOne читает ровно одну строку. Отсутствие строки — domain.ErrNotFound.
 func (r *Repository) queryOne(ctx context.Context, query string, args ...any) (domain.Avatar, error) {
 	ctx, cancel := r.withDeadline(ctx)
@@ -159,5 +196,14 @@ func (r *Repository) queryMany(ctx context.Context, what, query string, args ...
 		if err := rows.Err(); err != nil {
 			yield(domain.Avatar{}, fmt.Errorf("%s: %w", what, err))
 		}
+	}
+}
+
+// failedSeq — последовательность из одной ошибки. Аргументы перебора
+// проверяются до запроса, а сообщить о них вызывающему можно только
+// через сам перебор.
+func failedSeq(err error) iter.Seq2[domain.Avatar, error] {
+	return func(yield func(domain.Avatar, error) bool) {
+		yield(domain.Avatar{}, err)
 	}
 }

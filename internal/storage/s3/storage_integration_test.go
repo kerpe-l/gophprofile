@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/minio/minio-go/v7"
+	"github.com/minio/minio-go/v7/pkg/credentials"
 	"github.com/stretchr/testify/suite"
 	"github.com/testcontainers/testcontainers-go"
 	tcminio "github.com/testcontainers/testcontainers-go/modules/minio"
@@ -62,8 +64,24 @@ func (s *StorageSuite) SetupSuite() {
 		Timeout:   10 * time.Second,
 	}
 
+	// Бакет заводит инфраструктура — в compose это одноразовый minio-init,
+	// здесь его роль играет сам тест: хранилище бакетов не создаёт.
+	s.makeBucket(ctx, storageBucket)
+
 	s.storage, err = s3.New(ctx, s.cfg)
 	s.Require().NoError(err)
+}
+
+// makeBucket создаёт бакет мимо проверяемого хранилища.
+func (s *StorageSuite) makeBucket(ctx context.Context, bucket string) {
+	s.T().Helper()
+
+	client, err := minio.New(s.cfg.Endpoint, &minio.Options{
+		Creds:  credentials.NewStaticV4(s.cfg.AccessKey, s.cfg.SecretKey, ""),
+		Region: s.cfg.Region,
+	})
+	s.Require().NoError(err)
+	s.Require().NoError(client.MakeBucket(ctx, bucket, minio.MakeBucketOptions{Region: s.cfg.Region}))
 }
 
 func (s *StorageSuite) TearDownSuite() {
@@ -150,18 +168,19 @@ func (s *StorageSuite) TestDeleteManyWithMissingKeys() {
 	}
 }
 
-func (s *StorageSuite) TestNewCreatesMissingBucket() {
+// Отсутствующий бакет — дефект развёртывания, а не повод завести его на лету:
+// иначе опечатка в имени бакета оборачивается пустым хранилищем без аватаров.
+func (s *StorageSuite) TestNewMissingBucket() {
 	cfg := s.cfg
-	cfg.Bucket = "created-on-start"
+	cfg.Bucket = "never-created"
 
 	storage, err := s3.New(s.T().Context(), cfg)
-	s.Require().NoError(err)
+	s.Require().Error(err)
+	s.Nil(storage)
 
-	defer storage.Close()
-
-	// Бакет создан: хранилище отвечает на проверку, а не сообщает,
-	// что бакета нет.
-	s.Require().NoError(storage.Ping(s.T().Context()))
+	// Бакета так и нет: создание проходит, а на уже созданном хранилищем
+	// бакете оно бы отказало.
+	s.makeBucket(s.T().Context(), cfg.Bucket)
 }
 
 func (s *StorageSuite) TestCancelledContext() {

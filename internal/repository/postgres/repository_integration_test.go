@@ -267,8 +267,62 @@ func (s *RepositorySuite) TestSetProcessingStatus() {
 	)
 }
 
+// Загрузка не откатывается назад, а законченная обработка не начинается
+// заново: запрещённый переход обязан отличаться и от успеха, и от отсутствия
+// записи — вызывающему по нему решать, повторять работу или нет.
+func (s *RepositorySuite) TestForbiddenTransitions() {
+	ctx := s.T().Context()
+
+	uploaded := s.createAvatar(userAlice)
+	s.Require().NoError(s.repo.SetUploadStatus(ctx, uploaded.ID, domain.UploadStatusUploaded))
+
+	// Назад в uploading и повторно в uploaded — из терминального статуса
+	// переходов нет.
+	s.Require().ErrorIs(
+		s.repo.SetUploadStatus(ctx, uploaded.ID, domain.UploadStatusUploading),
+		domain.ErrInvalidTransition,
+	)
+	s.Require().ErrorIs(
+		s.repo.SetUploadStatus(ctx, uploaded.ID, domain.UploadStatusFailed),
+		domain.ErrInvalidTransition,
+	)
+
+	// Завершить можно только начатую обработку.
+	pending := s.createAvatar(userAlice)
+	s.Require().ErrorIs(
+		s.repo.CompleteProcessing(ctx, pending.ID, nil),
+		domain.ErrInvalidTransition,
+	)
+
+	s.Require().NoError(s.repo.SetProcessingStatus(ctx, pending.ID, domain.ProcessingStatusProcessing))
+	s.Require().NoError(s.repo.CompleteProcessing(ctx, pending.ID, nil))
+	s.Require().ErrorIs(
+		s.repo.SetProcessingStatus(ctx, pending.ID, domain.ProcessingStatusProcessing),
+		domain.ErrInvalidTransition,
+	)
+
+	// Статусы записи не изменились ни от одной запрещённой попытки.
+	got, err := s.repo.Get(ctx, uploaded.ID)
+	s.Require().NoError(err)
+	s.Equal(domain.UploadStatusUploaded, got.UploadStatus)
+}
+
+// Повторная доставка события застаёт запись уже в processing, и обработка
+// начинается заново: иначе после падения обработчика аватар остался бы
+// без миниатюр навсегда.
+func (s *RepositorySuite) TestProcessingRestarts() {
+	ctx := s.T().Context()
+	avatar := s.createAvatar(userAlice)
+
+	s.Require().NoError(s.repo.SetProcessingStatus(ctx, avatar.ID, domain.ProcessingStatusProcessing))
+	s.Require().NoError(s.repo.SetProcessingStatus(ctx, avatar.ID, domain.ProcessingStatusProcessing))
+}
+
 func (s *RepositorySuite) TestCompleteProcessingStoresThumbnails() {
 	avatar := s.createAvatar(userAlice)
+	s.Require().NoError(
+		s.repo.SetProcessingStatus(s.T().Context(), avatar.ID, domain.ProcessingStatusProcessing),
+	)
 
 	thumbnails := map[domain.ThumbnailSize]string{
 		domain.ThumbnailSmall:  domain.ThumbnailKey(avatar.ID, domain.ThumbnailSmall),
@@ -380,6 +434,24 @@ func (s *RepositorySuite) TestSelectStuckRespectsLimit() {
 	}
 
 	s.Len(s.collect(s.repo.SelectStuck(s.T().Context(), cutoff, 2)), 2)
+}
+
+// Неположительный предел — ошибка вызывающего, а не выборка «сколько
+// найдётся»: до базы такой перебор не доходит.
+func (s *RepositorySuite) TestSelectStuckRejectsNonPositiveLimit() {
+	s.createAvatar(userAlice)
+
+	for _, limit := range []int{0, -1} {
+		var errs int
+
+		for _, err := range s.repo.SelectStuck(s.T().Context(), time.Now(), limit) {
+			s.Require().Error(err)
+
+			errs++
+		}
+
+		s.Equalf(1, errs, "предел %d", limit)
+	}
 }
 
 // Отменённый контекст обязан прерывать запрос ошибкой, а не оставлять

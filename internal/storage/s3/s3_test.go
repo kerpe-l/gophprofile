@@ -29,7 +29,7 @@ const (
 // а то, что вызов вообще возвращается.
 const shortTimeout = 200 * time.Millisecond
 
-// recorder — фальшивое хранилище: отвечает на проверку и создание бакета
+// recorder — фальшивое хранилище: отвечает на проверку бакета
 // и запоминает, какие запросы к нему пришли.
 type recorder struct {
 	mu       sync.Mutex
@@ -50,8 +50,8 @@ func (rec *recorder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	rec.requests = append(rec.requests, r.Method+" /"+path)
 	rec.mu.Unlock()
 
-	// Проверка и создание бакета: HEAD /bucket и PUT /bucket. Пакетное
-	// удаление идёт на тот же путь, но с query, и сюда попадать не должно.
+	// Проверка бакета: HEAD /bucket. Пакетное удаление идёт на тот же путь,
+	// но с query, и сюда попадать не должно.
 	if path == testBucket && r.URL.RawQuery == "" {
 		if r.Method == http.MethodHead && !rec.bucketExists {
 			w.WriteHeader(http.StatusNotFound)
@@ -126,16 +126,33 @@ func TestNewExistingBucket(t *testing.T) {
 	newStorage(t, rec, shortTimeout)
 
 	assert.Equal(t, []string{"HEAD /" + testBucket}, rec.seen(),
-		"существующий бакет не должен создаваться заново")
+		"старт не должен делать с бакетом ничего, кроме проверки")
 }
 
-func TestNewCreatesBucket(t *testing.T) {
+// Бакет заводит инфраструктура: приложение с его отсутствием не мирится
+// и не создаёт бакет само.
+func TestNewMissingBucket(t *testing.T) {
 	t.Parallel()
 
 	rec := &recorder{bucketExists: false, objects: notFound}
-	newStorage(t, rec, shortTimeout)
+	srv := httptest.NewServer(rec)
 
-	assert.Equal(t, []string{"HEAD /" + testBucket, "PUT /" + testBucket}, rec.seen())
+	t.Cleanup(srv.Close)
+
+	endpoint, err := url.Parse(srv.URL)
+	require.NoError(t, err)
+
+	storage, err := s3.New(t.Context(), config.S3{
+		Endpoint:  endpoint.Host,
+		AccessKey: "access",
+		SecretKey: "secret",
+		Bucket:    testBucket,
+		Region:    "us-east-1",
+		Timeout:   shortTimeout,
+	})
+	require.Error(t, err)
+	assert.Nil(t, storage)
+	assert.Equal(t, []string{"HEAD /" + testBucket}, rec.seen(), "бакет не должен создаваться приложением")
 }
 
 func TestGetMissingObject(t *testing.T) {

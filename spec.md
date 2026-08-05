@@ -210,14 +210,17 @@ CREATE TABLE avatars (
 );
 
 CREATE INDEX idx_avatars_user_id ON avatars(user_id) WHERE deleted_at IS NULL;
-CREATE INDEX idx_avatars_status  ON avatars(upload_status, processing_status);
+CREATE INDEX idx_avatars_status  ON avatars(upload_status, processing_status, updated_at)
+    WHERE deleted_at IS NULL;
 ```
 
 `width`/`height` добавлены к исходной схеме — §4.3 требует `dimensions` в метаданных, а читать их из S3 на каждый запрос метаданных незачем: они известны на этапе загрузки из `image.DecodeConfig`.
 
-`idx_avatars_status` не используется ни одним запросом API — он существует ради reconciler'а (§6.3).
+`idx_avatars_status` не используется ни одним запросом API — он существует ради reconciler'а (§6.3). `updated_at` входит в него третьей колонкой, потому что запрос reconciler'а по нему и отбирает (старше отсечки), и упорядочивает; без этой колонки отобранное пришлось бы сортировать отдельно. Индекс частичный: мягко удалённые записи в добор не попадают.
 
 `thumbnail_s3_keys` — объект `{"100x100": "thumbnails/<id>/100x100", "300x300": "..."}`.
+
+Допустимые переходы статусов. `upload_status`: `uploading → uploaded` и `uploading → failed`; `uploaded` и `failed` терминальны — повторная загрузка порождает новую запись, а не переоткрывает старую. `processing_status`: `pending → processing`, `processing → processing` (повторная доставка после падения обработчика начинает работу заново), `processing → completed`, `pending → failed` и `processing → failed`; `completed` и `failed` терминальны — за повтор отвечает лестница retry-очередей (§6.2), а не возврат записи в предыдущий статус. Переход проверяет сама база: `UPDATE` отбирает строку не только по `id`, но и по списку разрешённых исходных статусов, иначе между чтением статуса и записью его успевает сменить другой процесс.
 
 S3-ключи: `originals/{avatar_id}` и `thumbnails/{avatar_id}/{size}` — генерируются сервисом, имя файла пользователя в ключах не участвует.
 

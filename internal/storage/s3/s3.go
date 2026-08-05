@@ -55,9 +55,10 @@ type Storage struct {
 	timeout time.Duration
 }
 
-// New подключается к хранилищу и убеждается, что бакет существует, создавая
-// его при необходимости. Транспорт принадлежит хранилищу: закрывается методом
-// Close и только им.
+// New подключается к хранилищу и убеждается, что бакет на месте. Отсутствие
+// бакета — ошибка старта: создаёт его инфраструктура, приложению право
+// на создание бакетов не нужно. Транспорт принадлежит хранилищу: закрывается
+// методом Close и только им.
 func New(ctx context.Context, cfg config.S3) (*Storage, error) {
 	transport := newTransport()
 
@@ -81,7 +82,7 @@ func New(ctx context.Context, cfg config.S3) (*Storage, error) {
 		timeout:   cfg.Timeout,
 	}
 
-	if err := s.ensureBucket(ctx); err != nil {
+	if err := s.checkBucket(ctx); err != nil {
 		s.Close()
 
 		return nil, err
@@ -98,38 +99,31 @@ func (s *Storage) Close() {
 
 // Ping проверяет, что хранилище отвечает и бакет на месте.
 func (s *Storage) Ping(ctx context.Context) error {
-	ctx, cancel := s.withDeadline(ctx)
-	defer cancel()
-
-	if _, err := s.client.BucketExists(ctx, s.bucket); err != nil {
+	if err := s.checkBucket(ctx); err != nil {
 		return fmt.Errorf("ping storage: %w", err)
 	}
 
 	return nil
 }
 
-// ensureBucket создаёт бакет, если его ещё нет. Гонка двух стартующих
-// процессов безопасна: хранилище отвечает на повторное создание кодом
-// BucketAlreadyOwnedByYou, и это не ошибка.
-func (s *Storage) ensureBucket(ctx context.Context) error {
+// checkBucket убеждается, что бакет существует. Создавать его приложение
+// не пытается: бакет заводит инфраструктура (в локальном окружении —
+// одноразовый инициализатор compose), а рантайм с правом на создание бакетов
+// молча заведёт новый пустой при опечатке в имени вместо того, чтобы упасть.
+//
+// Отсутствие бакета — обычная ошибка, а не domain.ErrNotFound: это дефект
+// развёртывания, и на «аватара нет» он не похож.
+func (s *Storage) checkBucket(ctx context.Context) error {
 	ctx, cancel := s.withDeadline(ctx)
 	defer cancel()
 
 	exists, err := s.client.BucketExists(ctx, s.bucket)
 	if err != nil {
-		return fmt.Errorf("check bucket: %w", err)
+		return fmt.Errorf("check bucket %s: %w", s.bucket, err)
 	}
 
-	if exists {
-		return nil
-	}
-
-	if err := s.client.MakeBucket(ctx, s.bucket, minio.MakeBucketOptions{}); err != nil {
-		if minio.ToErrorResponse(err).Code == minio.BucketAlreadyOwnedByYou {
-			return nil
-		}
-
-		return fmt.Errorf("create bucket: %w", err)
+	if !exists {
+		return fmt.Errorf("bucket %s does not exist", s.bucket)
 	}
 
 	return nil
