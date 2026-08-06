@@ -259,16 +259,19 @@ Worker перед обработкой проверяет `processing_status` в
 
 ```
 avatars.exchange (topic)
-  └─→ avatars.process         [x-dead-letter-exchange: avatars.retry]
+  └─→ avatars.process         [ключ avatar.*; x-dead-letter-exchange: avatars.retry]
 avatars.retry (direct)
-  ├─→ avatars.retry.5s        [ttl=5s,  dlx → avatars.exchange]
-  ├─→ avatars.retry.30s       [ttl=30s, dlx → avatars.exchange]
-  └─→ avatars.retry.5m        [ttl=5m,  dlx → avatars.exchange]
+  ├─→ avatars.retry.5s        [ключ retry.5s,  ttl=5s,  dlx → avatars.exchange, ключ возврата avatar.retried]
+  ├─→ avatars.retry.30s       [ключ retry.30s, ttl=30s, dlx → avatars.exchange, ключ возврата avatar.retried]
+  └─→ avatars.retry.5m        [ключ retry.5m,  ttl=5m,  dlx → avatars.exchange, ключ возврата avatar.retried]
 avatars.dlq (direct)
   └─→ avatars.dead
 ```
 
-- Число попыток считается по заголовку `x-death` (RabbitMQ ведёт его сам) — уровень задержки выбирается по счётчику: 1→5s, 2→30s, 3+→5m.
+- Ступень задержки выбирает консьюмер: он публикует сообщение в `avatars.retry` с ключом нужной ступени и подтверждает исходное. Отклонением ступень не выбрать — у очереди один dead-letter exchange и один статический ключ, то есть ровно один уровень задержки на всю очередь. Отклонённое сообщение всё равно не теряется: очередь первой ступени привязана и к ключам событий тоже.
+- Уровень задержки выбирается по номеру попытки: 1→5s, 2→30s, 3+→5m.
+- Число попыток консьюмер ведёт сам в заголовке `x-avatar-attempts`. Заголовок `x-death` для этого не годится: RabbitMQ не сохраняет выставленный клиентом и собирает историю заново, поэтому у перекладываемого со ступени на ступень сообщения он всегда показывает одно отклонение. `x-death` остаётся запасным источником — по нему считается попытка у сообщения, которое очередь отклонила сама, минуя консьюмера.
+- Тип события едет в свойстве `type` сообщения, а не в routing key: при возврате с лестницы ключ переписывается на `avatar.retried`, и диспетчеризация обработчиков по ключу после первого же повтора уехала бы не туда.
 - После **5** попыток сообщение уходит в `avatars.dlq`, в БД проставляется `processing_status = 'failed'`.
 - Ошибки делятся на retryable (сеть, временная недоступность S3/PG) и non-retryable (битый файл, неподдерживаемый формат, аватар удалён). Non-retryable → сразу `failed` + ack, без прогона по лестнице: перекодировать битый JPEG через 5 минут не выйдет.
 - `sleep` в консьюмере вместо очередей не годится: блокирует префетч и держит соединение.
