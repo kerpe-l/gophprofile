@@ -32,6 +32,7 @@ const (
 	envHTTPWriteTimeout      = "HTTP_WRITE_TIMEOUT" //nolint:gosec // имя переменной окружения, а не значение секрета
 	envHTTPIdleTimeout       = "HTTP_IDLE_TIMEOUT"
 	envHTTPShutdownTimeout   = "HTTP_SHUTDOWN_TIMEOUT"
+	envHTTPRequestTimeout    = "HTTP_REQUEST_TIMEOUT"
 
 	envDatabaseDSN    = "DATABASE_DSN"
 	envDBMaxConns     = "DB_MAX_CONNS"
@@ -72,6 +73,8 @@ const (
 	defaultHTTPWriteTimeout      = 60 * time.Second
 	defaultHTTPIdleTimeout       = 2 * time.Minute
 	defaultHTTPShutdownTimeout   = 15 * time.Second
+	// Дедлайн обработки запроса. Загрузка под него не попадает: заливка – ReadTimeout.
+	defaultHTTPRequestTimeout = 30 * time.Second
 
 	defaultDBMaxConns     = 10
 	defaultDBQueryTimeout = 5 * time.Second
@@ -136,6 +139,9 @@ type HTTP struct {
 	IdleTimeout time.Duration
 	// ShutdownTimeout — сколько ждать завершения активных запросов при остановке.
 	ShutdownTimeout time.Duration
+	// RequestTimeout — предел на обработку одного запроса. На загрузку
+	// не распространяется: её ограничивает ReadTimeout.
+	RequestTimeout time.Duration
 }
 
 // DB — доступ к PostgreSQL.
@@ -285,6 +291,7 @@ func load(env getenv) (*Config, error) {
 			WriteTimeout:      r.duration(envHTTPWriteTimeout, defaultHTTPWriteTimeout),
 			IdleTimeout:       r.duration(envHTTPIdleTimeout, defaultHTTPIdleTimeout),
 			ShutdownTimeout:   r.duration(envHTTPShutdownTimeout, defaultHTTPShutdownTimeout),
+			RequestTimeout:    r.duration(envHTTPRequestTimeout, defaultHTTPRequestTimeout),
 		},
 		DB: DB{
 			DSN:          r.str(envDatabaseDSN, ""),
@@ -346,6 +353,7 @@ func (c HTTP) validate() error {
 		positiveDuration(envHTTPWriteTimeout, c.WriteTimeout),
 		positiveDuration(envHTTPIdleTimeout, c.IdleTimeout),
 		positiveDuration(envHTTPShutdownTimeout, c.ShutdownTimeout),
+		positiveDuration(envHTTPRequestTimeout, c.RequestTimeout),
 	)
 }
 

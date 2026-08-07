@@ -50,6 +50,7 @@ func TestLoadServerDefaults(t *testing.T) {
 	assert.Equal(t, logger.FormatText, cfg.App.LogFormat)
 	assert.Equal(t, defaultHTTPAddr, cfg.HTTP.Addr)
 	assert.Equal(t, defaultHTTPReadTimeout, cfg.HTTP.ReadTimeout)
+	assert.Equal(t, defaultHTTPRequestTimeout, cfg.HTTP.RequestTimeout)
 	assert.Equal(t, defaultDBMaxConns, cfg.DB.MaxConns)
 	assert.Equal(t, defaultS3Bucket, cfg.S3.Bucket)
 	assert.False(t, cfg.S3.UseSSL)
@@ -67,6 +68,7 @@ func TestLoadServerOverrides(t *testing.T) {
 	env[envLogLevel] = "debug"
 	env[envHTTPAddr] = "127.0.0.1:9090"
 	env[envHTTPReadTimeout] = "42s"
+	env[envHTTPRequestTimeout] = "7s"
 	env[envS3UseSSL] = "true"
 	env[envS3Bucket] = "pictures"
 	env[envAMQPPrefetch] = "16"
@@ -82,6 +84,7 @@ func TestLoadServerOverrides(t *testing.T) {
 	assert.Equal(t, logger.FormatJSON, cfg.App.LogFormat)
 	assert.Equal(t, "127.0.0.1:9090", cfg.HTTP.Addr)
 	assert.Equal(t, 42*time.Second, cfg.HTTP.ReadTimeout)
+	assert.Equal(t, 7*time.Second, cfg.HTTP.RequestTimeout)
 	assert.True(t, cfg.S3.UseSSL)
 	assert.Equal(t, "pictures", cfg.S3.Bucket)
 	assert.Equal(t, 16, cfg.AMQP.Prefetch)
