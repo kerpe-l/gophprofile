@@ -105,14 +105,14 @@ func (s *StorageSuite) TestPutGetRoundtrip() {
 	s.Require().NoError(err)
 
 	defer func() {
-		s.NoError(object.Close())
+		s.NoError(object.Body.Close())
 	}()
 
 	s.Equal(pngMediaType, object.ContentType)
 	s.Equal(int64(len(body)), object.Size)
 	s.NotEmpty(object.ETag, "ETag нужен для If-None-Match")
 
-	got, err := io.ReadAll(object)
+	got, err := io.ReadAll(object.Body)
 	s.Require().NoError(err)
 	s.Equal(body, got)
 }
@@ -125,10 +125,10 @@ func (s *StorageSuite) TestPutOverwrites() {
 	s.Require().NoError(err)
 
 	defer func() {
-		s.NoError(object.Close())
+		s.NoError(object.Body.Close())
 	}()
 
-	got, err := io.ReadAll(object)
+	got, err := io.ReadAll(object.Body)
 	s.Require().NoError(err)
 	s.Equal([]byte("second"), got)
 }

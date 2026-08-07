@@ -165,7 +165,7 @@ func TestGetMissingObject(t *testing.T) {
 	// к тому моменту статус ответа клиенту уже был бы отправлен.
 	object, err := storage.Get(t.Context(), testKey)
 	require.ErrorIs(t, err, domain.ErrNotFound)
-	assert.Nil(t, object)
+	assert.Nil(t, object.Body, "закрывать вызывающему нечего")
 }
 
 func TestDeleteMissingObject(t *testing.T) {
@@ -336,7 +336,7 @@ func TestHangingStorageCallerDeadline(t *testing.T) {
 
 		object, err := storage.Get(ctx, testKey)
 		if err == nil {
-			return object.Close()
+			return object.Body.Close()
 		}
 
 		return err

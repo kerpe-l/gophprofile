@@ -8,42 +8,12 @@ import (
 	"iter"
 
 	"github.com/minio/minio-go/v7"
+
+	"github.com/kerpe-l/gophprofile/internal/domain"
 )
 
 // defaultContentType — тип содержимого для объекта, у которого он не задан.
 const defaultContentType = "application/octet-stream"
-
-// Object — открытый на чтение объект хранилища вместе с метаданными,
-// которые нужны для заголовков ответа.
-//
-// Объект обязан быть закрыт: до Close заняты соединение с хранилищем
-// и горутина чтения внутри клиента.
-type Object struct {
-	// ETag — хеш содержимого, каким его отдало хранилище, без обрамляющих
-	// кавычек: их добавляет транспорт при записи заголовка.
-	ETag string
-	// ContentType — тип содержимого, записанный при загрузке.
-	ContentType string
-	// Size — размер объекта в байтах.
-	Size int64
-
-	body *minio.Object
-}
-
-// Read читает содержимое объекта. Ошибка не оборачивается: io.EOF обязан
-// дойти до io.Copy в исходном виде.
-func (o *Object) Read(p []byte) (int, error) {
-	return o.body.Read(p)
-}
-
-// Close освобождает соединение с хранилищем.
-func (o *Object) Close() error {
-	if err := o.body.Close(); err != nil {
-		return fmt.Errorf("close object: %w", err)
-	}
-
-	return nil
-}
 
 // Put кладёт объект по ключу, перезаписывая существующий. Размер обязателен:
 // без него клиент вынужден буферизовать поток, чтобы собрать multipart.
@@ -68,8 +38,8 @@ func (s *Storage) Put(ctx context.Context, key string, r io.Reader, size int64, 
 	return nil
 }
 
-// Get открывает объект на чтение. Возвращённый объект обязан быть закрыт
-// вызывающим, в том числе если чтение прервалось на середине.
+// Get открывает объект на чтение. Тело возвращённого объекта обязано быть
+// закрыто вызывающим, в том числе если чтение прервалось на середине.
 //
 // Отсутствие объекта — domain.ErrNotFound.
 //
@@ -77,10 +47,10 @@ func (s *Storage) Put(ctx context.Context, key string, r io.Reader, size int64, 
 // из метода, и дедлайн, снятый по выходу, оборвал бы выдачу на середине.
 // Ограничить всю выдачу — задача вызывающего: у него есть дедлайн запроса
 // или бюджет обработки сообщения.
-func (s *Storage) Get(ctx context.Context, key string) (*Object, error) {
+func (s *Storage) Get(ctx context.Context, key string) (domain.StoredObject, error) {
 	obj, err := s.client.GetObject(ctx, s.bucket, key, minio.GetObjectOptions{})
 	if err != nil {
-		return nil, mapError("get object", key, err)
+		return domain.StoredObject{}, mapError("get object", key, err)
 	}
 
 	// Запрос к хранилищу клиент откладывает до первого чтения, поэтому Stat
@@ -92,14 +62,14 @@ func (s *Storage) Get(ctx context.Context, key string) (*Object, error) {
 		// её не уточняет.
 		_ = obj.Close()
 
-		return nil, mapError("get object", key, err)
+		return domain.StoredObject{}, mapError("get object", key, err)
 	}
 
-	return &Object{
+	return domain.StoredObject{
+		Body:        obj,
 		ETag:        info.ETag,
 		ContentType: info.ContentType,
 		Size:        info.Size,
-		body:        obj,
 	}, nil
 }
 
