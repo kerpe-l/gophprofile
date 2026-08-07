@@ -41,10 +41,11 @@ type Conn struct {
 	levels []retryLevel
 	// prefetch — сколько сообщений консьюмер берёт не подтверждая.
 	prefetch int
-	// timeout — предел на публикацию и на обработку одного сообщения. Поле,
-	// а не константа пакета, чтобы тест мог подставить своё значение
-	// и не ждать реальных секунд.
+	// timeout — предел на публикацию. Поле, а не константа пакета, чтобы тест
+	// мог подставить своё значение и не ждать реальных секунд.
 	timeout time.Duration
+	// processTimeout — предел на обработку одного сообщения.
+	processTimeout time.Duration
 }
 
 // Option меняет параметры соединения, заданные по умолчанию.
@@ -63,6 +64,23 @@ func WithRetryDelays(delays ...time.Duration) Option {
 		}
 
 		c.levels = newRetryLevels(delays)
+	}
+}
+
+// WithProcessTimeout задаёт предел на обработку одного сообщения вместо
+// предела публикации.
+//
+// Пределы разные, потому что разной длины и работа: публикация ждёт
+// подтверждения брокером, а обработка события загрузки читает оригинал
+// из хранилища, декодирует его и пишет обратно миниатюры. Неположительное
+// значение ничего не меняет.
+func WithProcessTimeout(timeout time.Duration) Option {
+	return func(c *Conn) {
+		if timeout <= 0 {
+			return
+		}
+
+		c.processTimeout = timeout
 	}
 }
 
@@ -86,6 +104,9 @@ func New(ctx context.Context, cfg config.AMQP, opts ...Option) (*Conn, error) {
 		levels:   newRetryLevels(defaultRetryDelays()),
 		prefetch: cfg.Prefetch,
 		timeout:  cfg.Timeout,
+		// Пока свой предел не задан, обработка укладывается в тот же, что
+		// и публикация: консьюмера может и не быть вовсе.
+		processTimeout: cfg.Timeout,
 	}
 
 	for _, opt := range opts {

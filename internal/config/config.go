@@ -53,6 +53,11 @@ const (
 	envImageMaxUploadBytes = "IMAGE_MAX_UPLOAD_BYTES"
 	envImageMaxPixels      = "IMAGE_MAX_PIXELS"
 	envImageJPEGQuality    = "IMAGE_JPEG_QUALITY"
+
+	envWorkerProcessTimeout    = "WORKER_PROCESS_TIMEOUT"
+	envWorkerReconcileInterval = "WORKER_RECONCILE_INTERVAL"
+	envWorkerStuckAfter        = "WORKER_STUCK_AFTER"
+	envWorkerReconcileBatch    = "WORKER_RECONCILE_BATCH"
 )
 
 // Окружения, в которых запускается сервис.
@@ -94,6 +99,17 @@ const (
 	// на число пикселей.
 	defaultImageMaxPixels   int64 = 50_000_000
 	defaultImageJPEGQuality int   = 85
+
+	// Обработка одного сообщения — это чтение оригинала из хранилища,
+	// декодирование до 50 Мпикс, два ресайза и две записи обратно; предел
+	// публикации на это не рассчитан.
+	defaultWorkerProcessTimeout = 60 * time.Second
+	// Добор зависших загрузок идёт раз в минуту и отбирает записи, которые
+	// не менялись пять минут: за это время обработка штатного события успевает
+	// и начаться, и закончиться.
+	defaultWorkerReconcileInterval = time.Minute
+	defaultWorkerStuckAfter        = 5 * time.Minute
+	defaultWorkerReconcileBatch    = 100
 )
 
 // maxJPEGQuality — верхняя граница качества JPEG в пакете image/jpeg.
@@ -113,6 +129,8 @@ type Config struct {
 	AMQP AMQP
 	// Image — лимиты и параметры обработки изображений.
 	Image Image
+	// Worker — параметры обработчика событий; нужны только воркеру.
+	Worker Worker
 }
 
 // App — общие настройки приложения.
@@ -192,6 +210,21 @@ type Image struct {
 	JPEGQuality int
 }
 
+// Worker — параметры обработчика событий.
+type Worker struct {
+	// ProcessTimeout — предел на обработку одного сообщения. Отдельный от
+	// AMQP.Timeout: тот рассчитан на публикацию с подтверждением, а создание
+	// миниатюр занимает на порядок больше.
+	ProcessTimeout time.Duration
+	// ReconcileInterval — период добора зависших загрузок.
+	ReconcileInterval time.Duration
+	// StuckAfter — возраст, начиная с которого загрузка без начатой обработки
+	// считается зависшей.
+	StuckAfter time.Duration
+	// ReconcileBatch — сколько зависших записей разбирается за один проход.
+	ReconcileBatch int
+}
+
 // getenv — источник значений переменных окружения.
 // Отдельный тип нужен, чтобы тесты не правили окружение процесса.
 type getenv func(key string) string
@@ -247,6 +280,7 @@ func loadWorker(env getenv) (*Config, error) {
 		cfg.S3.validate(),
 		cfg.AMQP.validate(),
 		cfg.Image.validate(),
+		cfg.Worker.validate(),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("invalid worker configuration: %w", err)
@@ -316,6 +350,12 @@ func load(env getenv) (*Config, error) {
 			MaxUploadBytes: r.integer64(envImageMaxUploadBytes, defaultImageMaxUploadBytes),
 			MaxPixels:      r.integer64(envImageMaxPixels, defaultImageMaxPixels),
 			JPEGQuality:    r.integer(envImageJPEGQuality, defaultImageJPEGQuality),
+		},
+		Worker: Worker{
+			ProcessTimeout:    r.duration(envWorkerProcessTimeout, defaultWorkerProcessTimeout),
+			ReconcileInterval: r.duration(envWorkerReconcileInterval, defaultWorkerReconcileInterval),
+			StuckAfter:        r.duration(envWorkerStuckAfter, defaultWorkerStuckAfter),
+			ReconcileBatch:    r.integer(envWorkerReconcileBatch, defaultWorkerReconcileBatch),
 		},
 	}
 
@@ -395,6 +435,15 @@ func (c Image) validate() error {
 	}
 
 	return err
+}
+
+func (c Worker) validate() error {
+	return errors.Join(
+		positiveDuration(envWorkerProcessTimeout, c.ProcessTimeout),
+		positiveDuration(envWorkerReconcileInterval, c.ReconcileInterval),
+		positiveDuration(envWorkerStuckAfter, c.StuckAfter),
+		positive(envWorkerReconcileBatch, int64(c.ReconcileBatch)),
+	)
 }
 
 func required(key, value string) error {

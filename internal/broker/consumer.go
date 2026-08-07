@@ -74,7 +74,7 @@ func (c *Conn) Consumer(log *slog.Logger) (*Consumer, error) {
 		log:      log,
 		levels:   c.levels,
 		prefetch: c.prefetch,
-		timeout:  c.timeout,
+		timeout:  c.processTimeout,
 	}, nil
 }
 
@@ -106,16 +106,12 @@ func (c *Consumer) Consume(ctx context.Context, handler Handler) error {
 
 	var wg sync.WaitGroup
 
-	wg.Add(c.prefetch)
-
 	for range c.prefetch {
-		go func() {
-			defer wg.Done()
-
+		wg.Go(func() {
 			for delivery := range jobs {
 				c.process(ctx, handler, delivery)
 			}
-		}()
+		})
 	}
 
 	err = c.pump(ctx, deliveries, closed, jobs)

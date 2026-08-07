@@ -142,6 +142,27 @@ func TestLoadWorkerIgnoresHTTPSection(t *testing.T) {
 	assert.Equal(t, defaultAMQPTimeout, cfg.AMQP.Timeout)
 }
 
+// Секция воркера проверяется только воркером: серверу его тикеры не нужны.
+func TestLoadWorkerSection(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := loadWorker(mapEnv(requiredEnv()))
+	require.NoError(t, err)
+	assert.Equal(t, defaultWorkerProcessTimeout, cfg.Worker.ProcessTimeout)
+	assert.Equal(t, defaultWorkerReconcileInterval, cfg.Worker.ReconcileInterval)
+	assert.Equal(t, defaultWorkerStuckAfter, cfg.Worker.StuckAfter)
+	assert.Equal(t, defaultWorkerReconcileBatch, cfg.Worker.ReconcileBatch)
+
+	env := requiredEnv()
+	env[envWorkerReconcileBatch] = "0"
+
+	_, err = loadWorker(mapEnv(env))
+	require.ErrorContains(t, err, envWorkerReconcileBatch+" must be positive")
+
+	_, err = loadServer(mapEnv(env))
+	require.NoError(t, err)
+}
+
 func TestLoadWorkerMissingSecrets(t *testing.T) {
 	t.Parallel()
 

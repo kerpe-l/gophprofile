@@ -40,18 +40,14 @@ func (a *api) health(w http.ResponseWriter, r *http.Request) {
 	)
 
 	for name, check := range a.checks {
-		wg.Add(1)
-
-		go func() {
-			defer wg.Done()
-
+		wg.Go(func() {
 			status := a.checkStatus(ctx, name, check)
 
 			mu.Lock()
 			defer mu.Unlock()
 
 			components[name] = status
-		}()
+		})
 	}
 
 	wg.Wait()
