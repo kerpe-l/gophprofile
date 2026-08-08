@@ -32,8 +32,10 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-gophprofile}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-gophprofile}
       POSTGRES_DB: ${POSTGRES_DB:-gophprofile}
+    # Публикуемые порты привязаны к loopback: dev-креды и API, доверяющий
+    # X-User-ID, наружу выставлять нельзя.
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - db-data:/var/lib/postgresql/data
     healthcheck:
@@ -51,8 +53,8 @@ services:
       MINIO_ROOT_USER: ${S3_ACCESS_KEY:-minioadmin}
       MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-minioadmin}
     ports:
-      - "${MINIO_PORT:-9000}:9000"
-      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+      - "127.0.0.1:${MINIO_PORT:-9000}:9000"
+      - "127.0.0.1:${MINIO_CONSOLE_PORT:-9001}:9001"
     volumes:
       - minio-data:/data
     healthcheck:
@@ -81,8 +83,8 @@ services:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-guest}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-guest}
     ports:
-      - "${RABBITMQ_PORT:-5672}:5672"
-      - "${RABBITMQ_MANAGEMENT_PORT:-15672}:15672"
+      - "127.0.0.1:${RABBITMQ_PORT:-5672}:5672"
+      - "127.0.0.1:${RABBITMQ_MANAGEMENT_PORT:-15672}:15672"
     volumes:
       - rabbitmq-data:/var/lib/rabbitmq
     healthcheck:
@@ -113,7 +115,7 @@ services:
       <<: *app-env
       HTTP_ADDR: ":8080"
     ports:
-      - "${HTTP_PORT:-8080}:8080"
+      - "127.0.0.1:${HTTP_PORT:-8080}:8080"
     depends_on:
       migrator:
         condition: service_completed_successfully
@@ -128,7 +130,11 @@ services:
       context: .
       dockerfile: build/Dockerfile.worker
       args: *build-args
-    environment: *app-env
+    environment:
+      <<: *app-env
+      # Ниже лимита контейнера: GC давит раньше, чем придёт OOM-killer.
+      GOMEMLIMIT: 400MiB
+    mem_limit: 512m
     depends_on:
       migrator:
         condition: service_completed_successfully
