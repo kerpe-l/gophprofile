@@ -32,7 +32,7 @@ func brokerConfig(addr string) config.AMQP {
 	}
 }
 
-// TestNewHangingBroker — брокер принял соединение и молчит. Рукопожатие AMQP
+// Брокер принял соединение и молчит. Рукопожатие AMQP
 // идёт уже на установленном соединении, и без собственного предела старт
 // сервиса завис бы на нём навсегда.
 func TestNewHangingBroker(t *testing.T) {

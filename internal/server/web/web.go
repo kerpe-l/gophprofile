@@ -208,7 +208,6 @@ func (h *Handlers) render(
 	}
 }
 
-// renderFailure показывает страницу отказа.
 func (h *Handlers) renderFailure(w http.ResponseWriter, r *http.Request, err error) {
 	status, message := h.describeError(err)
 	h.logFailure(r, status, err)

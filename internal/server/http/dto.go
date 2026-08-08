@@ -8,7 +8,6 @@ import (
 	"github.com/kerpe-l/gophprofile/internal/domain"
 )
 
-// uploadResponse — тело ответа на принятую загрузку.
 type uploadResponse struct {
 	ID        string    `json:"id"`
 	UserID    string    `json:"user_id"`
@@ -17,7 +16,6 @@ type uploadResponse struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-// metadataResponse — метаданные аватара.
 type metadataResponse struct {
 	ID         string         `json:"id"`
 	UserID     string         `json:"user_id"`
@@ -42,12 +40,10 @@ type thumbnailRef struct {
 	URL  string `json:"url"`
 }
 
-// listResponse — список аватаров пользователя.
 type listResponse struct {
 	Avatars []metadataResponse `json:"avatars"`
 }
 
-// newUploadResponse собирает ответ на загрузку.
 func newUploadResponse(avatar domain.Avatar) uploadResponse {
 	return uploadResponse{
 		ID:        avatar.ID.String(),

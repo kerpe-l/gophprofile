@@ -95,7 +95,7 @@ func TestValidate(t *testing.T) {
 	}
 }
 
-// TestValidateRewinds проверяет инвариант, на который опирается загрузка:
+// Инвариант, на который опирается загрузка:
 // после Validate поток стоит в начале и отдаёт исходные байты целиком,
 // без копии файла в памяти.
 func TestValidateRewinds(t *testing.T) {
@@ -138,8 +138,7 @@ func TestValidateEmptyInput(t *testing.T) {
 	require.ErrorIs(t, err, domain.ErrUnsupportedFormat)
 }
 
-// TestValidateRejectsOversized проверяет, что предел берётся из конфигурации,
-// а не зашит в пакет.
+// Предел берётся из конфигурации, а не зашит в пакет.
 func TestValidateRejectsOversized(t *testing.T) {
 	t.Parallel()
 

@@ -88,7 +88,6 @@ func flatten(img image.Image, width, height int) *image.NRGBA {
 	return imaging.Overlay(background, img, image.Pt(0, 0), 1.0)
 }
 
-// encode кодирует миниатюру в JPEG.
 func (p *Processor) encode(img image.Image) ([]byte, error) {
 	var buf bytes.Buffer
 

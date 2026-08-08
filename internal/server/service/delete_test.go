@@ -38,9 +38,8 @@ func TestDeleteCurrent(t *testing.T) {
 	assert.Equal(t, []uuid.UUID{d.repo.avatar.ID}, d.repo.deleted)
 }
 
-// TestDeletePublishesEveryKey — ключи миниатюр попадают в событие даже
-// до завершения обработки: воркер мог записать миниатюру уже после чтения
-// записи.
+// Ключи миниатюр попадают в событие даже до завершения обработки: воркер мог
+// записать миниатюру уже после чтения записи.
 func TestDeletePublishesEveryKey(t *testing.T) {
 	t.Parallel()
 
@@ -138,8 +137,8 @@ func TestDeleteRepositoryFails(t *testing.T) {
 	assert.Empty(t, d.publisher.events, "уборка файлов живого аватара не заказывается")
 }
 
-// TestDeletePublishFails — при отказе публикации файлы удаляются синхронно:
-// переопубликовать событие удаления некому.
+// При отказе публикации файлы удаляются синхронно: переопубликовать событие
+// удаления некому.
 func TestDeletePublishFails(t *testing.T) {
 	t.Parallel()
 
@@ -158,8 +157,7 @@ func TestDeletePublishFails(t *testing.T) {
 	assert.Equal(t, wantKeys, d.storage.deletedKeys)
 }
 
-// TestDeletePublishAndStorageFail — брокер и хранилище недоступны разом:
-// ошибка доходит до вызывающего.
+// Брокер и хранилище недоступны разом: ошибка доходит до вызывающего.
 func TestDeletePublishAndStorageFail(t *testing.T) {
 	t.Parallel()
 
@@ -172,8 +170,7 @@ func TestDeletePublishAndStorageFail(t *testing.T) {
 	require.ErrorIs(t, svc.Delete(t.Context(), d.repo.avatar.ID, testUserID), d.storage.deleteManyErr)
 }
 
-// TestDeleteSurvivesCanceledRequest — событие уборки публикуется
-// и на отменённом контексте запроса.
+// Событие уборки публикуется и на отменённом контексте запроса.
 func TestDeleteSurvivesCanceledRequest(t *testing.T) {
 	t.Parallel()
 

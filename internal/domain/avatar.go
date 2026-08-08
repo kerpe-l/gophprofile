@@ -22,10 +22,9 @@ type Avatar struct {
 	ThumbnailKeys    map[ThumbnailSize]string
 	UploadStatus     UploadStatus
 	ProcessingStatus ProcessingStatus
-	// RetryCount — сколько раз обработка уходила на повтор.
-	RetryCount int
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
+	RetryCount       int
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
 }
 
 // Thumbnail возвращает ключ миниатюры, если обработка завершена и размер

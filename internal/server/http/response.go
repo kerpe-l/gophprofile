@@ -71,7 +71,6 @@ var (
 	errFileNameTooLong = errors.New("file name is too long")
 )
 
-// errorResponse — тело ответа об ошибке.
 type errorResponse struct {
 	Error   string `json:"error"`
 	Details string `json:"details,omitempty"`

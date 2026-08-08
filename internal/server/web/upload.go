@@ -119,7 +119,6 @@ func (h *Handlers) accept(r *http.Request) (string, error) {
 	return userID, nil
 }
 
-// closeFile закрывает загруженный файл.
 func (h *Handlers) closeFile(ctx context.Context, file io.Closer) {
 	if err := file.Close(); err != nil {
 		h.log.WarnContext(ctx, "close uploaded file", slog.Any("error", err))

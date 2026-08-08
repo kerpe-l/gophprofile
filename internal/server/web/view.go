@@ -25,7 +25,6 @@ type uploadView struct {
 	MaxSize string
 }
 
-// galleryView — галерея пользователя.
 type galleryView struct {
 	UserID  string
 	Avatars []avatarView
@@ -44,13 +43,11 @@ type avatarView struct {
 	IsCurrent bool
 }
 
-// errorView — страница отказа.
 type errorView struct {
 	Status  int
 	Message string
 }
 
-// newUploadView собирает форму загрузки.
 func (h *Handlers) newUploadView(userID, failure string) uploadView {
 	return uploadView{
 		UserID:  userID,

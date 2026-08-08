@@ -40,8 +40,7 @@ func TestUpload(t *testing.T) {
 	assert.Equal(t, []byte("image bytes"), svc.uploadBody)
 }
 
-// TestUploadFieldNames — файл принимается и под именем image, но при обоих
-// именах сразу побеждает file.
+// Файл принимается и под именем image, но при обоих именах сразу побеждает file.
 func TestUploadFieldNames(t *testing.T) {
 	t.Parallel()
 
@@ -105,8 +104,8 @@ func TestUploadTooLarge(t *testing.T) {
 	assert.InDelta(t, float64(testMaxBytes), body["max_size"], 0)
 }
 
-// TestUploadExactLimit — файл ровно предельного размера принимается:
-// обвязка multipart не отбирает часть лимита у файла.
+// Файл ровно предельного размера принимается: обвязка multipart не отбирает
+// часть лимита у файла.
 func TestUploadExactLimit(t *testing.T) {
 	t.Parallel()
 

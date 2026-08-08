@@ -287,8 +287,8 @@ func TestDeleteManyEmpty(t *testing.T) {
 	require.NoError(t, storage.DeleteMany(t.Context(), nil))
 }
 
-// TestHangingStorageOwnTimeout — хранилище приняло соединение и не отвечает.
-// Вызов обязан вернуться по собственному пределу хранилища, а не висеть.
+// Хранилище приняло соединение и не отвечает. Вызов обязан вернуться
+// по собственному пределу хранилища, а не висеть.
 func TestHangingStorageOwnTimeout(t *testing.T) {
 	t.Parallel()
 
@@ -325,8 +325,8 @@ func TestHangingStorageOwnTimeout(t *testing.T) {
 	}
 }
 
-// TestHangingStorageCallerDeadline — Get своего предела не ставит: тело
-// читается уже после возврата. Ограничивает выдачу дедлайн вызывающего.
+// Get своего предела не ставит: тело читается уже после возврата.
+// Ограничивает выдачу дедлайн вызывающего.
 func TestHangingStorageCallerDeadline(t *testing.T) {
 	t.Parallel()
 

@@ -169,7 +169,6 @@ func avatarID(r *http.Request) (uuid.UUID, error) {
 	return id, nil
 }
 
-// thumbnailSize разбирает запрошенный размер изображения.
 func thumbnailSize(r *http.Request) (domain.ThumbnailSize, error) {
 	return domain.ParseThumbnailSize(r.URL.Query().Get(paramSize))
 }

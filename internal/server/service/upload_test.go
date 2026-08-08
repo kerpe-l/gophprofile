@@ -138,8 +138,8 @@ func TestUploadStorageFails(t *testing.T) {
 	assert.Empty(t, d.publisher.events, "событие о ненагруженном оригинале не отправляется")
 }
 
-// TestUploadStorageAndStatusFail — неудача перевода в failed не подменяет
-// собой отказ хранилища: наружу уходит причина, ради которой сюда пришли.
+// Неудача перевода в failed не подменяет собой отказ хранилища: наружу уходит
+// причина, ради которой сюда пришли.
 func TestUploadStorageAndStatusFail(t *testing.T) {
 	t.Parallel()
 
@@ -181,8 +181,8 @@ func TestUploadStatusFails(t *testing.T) {
 		d.repo.statuses, "после отказа запись переводится в failed")
 }
 
-// TestUploadSurvivesPublishFailure — оригинал уже в хранилище, запись
-// переведена в uploaded, и её переопубликует reconciler; заставлять клиента
+// Оригинал уже в хранилище, запись переведена в uploaded,
+// и её переопубликует reconciler; заставлять клиента
 // заливать файл заново незачем.
 func TestUploadSurvivesPublishFailure(t *testing.T) {
 	t.Parallel()
@@ -198,8 +198,8 @@ func TestUploadSurvivesPublishFailure(t *testing.T) {
 	assert.Equal(t, domain.ProcessingStatusPending, avatar.ProcessingStatus)
 }
 
-// TestUploadFinishesAfterClientLeaves — клиент, отвалившийся сразу после
-// заливки, не должен оставлять запись в uploading с уже лежащим в хранилище
+// Клиент, отвалившийся сразу после заливки, не должен оставлять запись
+// в uploading с уже лежащим в хранилище
 // файлом: такое состояние не подбирает никто.
 func TestUploadFinishesAfterClientLeaves(t *testing.T) {
 	t.Parallel()

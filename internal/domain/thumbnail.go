@@ -23,7 +23,6 @@ const (
 )
 
 // ThumbnailSizes возвращает размеры, в которых создаются миниатюры.
-// Функция, а не переменная: общий слайс вызывающий мог бы подменить.
 func ThumbnailSizes() []ThumbnailSize {
 	return []ThumbnailSize{ThumbnailSmall, ThumbnailMedium}
 }

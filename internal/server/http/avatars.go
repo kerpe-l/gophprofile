@@ -143,7 +143,6 @@ func (a *api) avatarContent(w http.ResponseWriter, r *http.Request) {
 	a.writeContent(w, r, content)
 }
 
-// avatarMetadata отдаёт метаданные аватара.
 func (a *api) avatarMetadata(w http.ResponseWriter, r *http.Request) {
 	id, err := avatarID(r)
 	if err != nil {
@@ -162,7 +161,6 @@ func (a *api) avatarMetadata(w http.ResponseWriter, r *http.Request) {
 	writeJSON(r.Context(), w, a.log, http.StatusOK, newMetadataResponse(avatar))
 }
 
-// deleteAvatar удаляет аватар по идентификатору.
 func (a *api) deleteAvatar(w http.ResponseWriter, r *http.Request) {
 	userID, err := requesterID(r)
 	if err != nil {
