@@ -20,6 +20,7 @@ import (
 	"github.com/kerpe-l/gophprofile/internal/repository/postgres"
 	httpapi "github.com/kerpe-l/gophprofile/internal/server/http"
 	"github.com/kerpe-l/gophprofile/internal/server/service"
+	"github.com/kerpe-l/gophprofile/internal/server/web"
 	"github.com/kerpe-l/gophprofile/internal/storage/s3"
 )
 
@@ -55,9 +56,14 @@ func run() error {
 
 	defer app.close(log)
 
+	router, err := app.router(cfg, log)
+	if err != nil {
+		return err
+	}
+
 	srv := &http.Server{
 		Addr:              cfg.HTTP.Addr,
-		Handler:           app.router(cfg, log),
+		Handler:           router,
 		ReadHeaderTimeout: cfg.HTTP.ReadHeaderTimeout,
 		ReadTimeout:       cfg.HTTP.ReadTimeout,
 		WriteTimeout:      cfg.HTTP.WriteTimeout,
@@ -140,7 +146,7 @@ func setup(ctx context.Context, cfg *config.Config, log *slog.Logger) (*deps, er
 }
 
 // router собирает сервис и маршруты поверх открытых зависимостей.
-func (d *deps) router(cfg *config.Config, log *slog.Logger) http.Handler {
+func (d *deps) router(cfg *config.Config, log *slog.Logger) (http.Handler, error) {
 	svc := service.New(
 		d.repo,
 		d.storage,
@@ -149,6 +155,15 @@ func (d *deps) router(cfg *config.Config, log *slog.Logger) http.Handler {
 		placeholder.New(),
 		log,
 	)
+
+	pages, err := web.New(web.Deps{
+		Service:        svc,
+		MaxUploadBytes: cfg.Image.MaxUploadBytes,
+		Log:            log,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("build web interface: %w", err)
+	}
 
 	return httpapi.New(httpapi.Deps{
 		Service: svc,
@@ -159,8 +174,9 @@ func (d *deps) router(cfg *config.Config, log *slog.Logger) http.Handler {
 		},
 		HTTP:           cfg.HTTP,
 		MaxUploadBytes: cfg.Image.MaxUploadBytes,
+		Web:            pages,
 		Log:            log,
-	})
+	}), nil
 }
 
 // close закрывает зависимости в порядке, обратном открытию.

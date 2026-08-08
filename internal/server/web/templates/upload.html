@@ -1,0 +1,27 @@
+{{define "title"}}Upload{{end}}
+
+{{define "content"}}
+<h1>Upload an avatar</h1>
+
+{{with .Error}}<p class="error" role="alert">{{.}}</p>{{end}}
+
+<form class="card" action="{{uploadURL ""}}" method="post" enctype="multipart/form-data">
+    <label for="user_id">User ID</label>
+    <input id="user_id" name="user_id" type="text" value="{{.UserID}}"
+           maxlength="255" autocomplete="off" required>
+
+    <label for="file">Image</label>
+    <input id="file" name="file" type="file"
+           accept="image/jpeg,image/png,image/webp" required>
+
+    <img id="preview" class="preview" alt="Preview of the selected image" hidden>
+
+    <p class="hint">JPEG, PNG or WebP, up to {{.MaxSize}}.</p>
+
+    <button type="submit">Upload</button>
+</form>
+
+{{with .UserID}}<p><a href="{{galleryURL .}}">Open the gallery of {{.}}</a></p>{{end}}
+
+<script src="{{staticURL "preview.js"}}"></script>
+{{end}}

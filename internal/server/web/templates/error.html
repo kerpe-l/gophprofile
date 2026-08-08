@@ -1,0 +1,9 @@
+{{define "title"}}Error {{.Status}}{{end}}
+
+{{define "content"}}
+<h1>Error {{.Status}}</h1>
+
+<p class="error" role="alert">{{.Message}}</p>
+
+<p><a href="{{uploadURL ""}}">Back to the upload form</a></p>
+{{end}}

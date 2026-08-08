@@ -12,6 +12,7 @@ import (
 	"github.com/kerpe-l/gophprofile/internal/config"
 	"github.com/kerpe-l/gophprofile/internal/domain"
 	"github.com/kerpe-l/gophprofile/internal/server/service"
+	"github.com/kerpe-l/gophprofile/internal/server/web"
 )
 
 // Префикс REST API и путь проверки состояния.
@@ -59,7 +60,9 @@ type Deps struct {
 	HTTP   config.HTTP
 	// MaxUploadBytes — предельный размер самого файла, без обвязки multipart.
 	MaxUploadBytes int64
-	Log            *slog.Logger
+	// Web — страницы веб-интерфейса; без них раздел /web не монтируется.
+	Web *web.Handlers
+	Log *slog.Logger
 }
 
 // api — состояние хендлеров.
@@ -87,13 +90,7 @@ func New(deps Deps) *chi.Mux {
 
 	r.Route(apiPrefix, func(r chi.Router) {
 		r.Group(func(r chi.Router) {
-			// Предел тела — размер файла плюс запас на обвязку multipart;
-			// сам файл сверяется с пределом в хендлере.
-			r.Use(
-				maxBytes(deps.MaxUploadBytes+multipartOverheadBytes),
-				timeout(deps.HTTP.ReadTimeout),
-				extendWriteDeadline(deps.HTTP.ReadTimeout+deps.HTTP.WriteTimeout, deps.Log),
-			)
+			r.Use(uploading(deps)...)
 			r.Post("/avatars", a.upload)
 		})
 
@@ -110,7 +107,40 @@ func New(deps Deps) *chi.Mux {
 		})
 	})
 
+	if deps.Web != nil {
+		mountWeb(r, deps)
+	}
+
 	return r
+}
+
+// uploading — ограничитель тела и сроки для приёма файла. Предел тела равен
+// размеру файла плюс запас на обвязку multipart; сам файл сверяется с пределом
+// в хендлере.
+func uploading(deps Deps) []func(http.Handler) http.Handler {
+	return []func(http.Handler) http.Handler{
+		maxBytes(deps.MaxUploadBytes + multipartOverheadBytes),
+		timeout(deps.HTTP.ReadTimeout),
+		extendWriteDeadline(deps.HTTP.ReadTimeout+deps.HTTP.WriteTimeout, deps.Log),
+	}
+}
+
+// mountWeb добавляет страницы веб-интерфейса. Форма загрузки получает те же
+// сроки и ограничитель тела, что и загрузка в API.
+func mountWeb(r chi.Router, deps Deps) {
+	r.Group(func(r chi.Router) {
+		r.Use(timeout(deps.HTTP.RequestTimeout))
+
+		r.Get(web.UploadPath, deps.Web.UploadForm)
+		r.Get(web.GalleryPattern, deps.Web.Gallery)
+		r.Mount(web.StaticPath, http.StripPrefix(web.StaticPath, deps.Web.Static()))
+	})
+
+	r.Group(func(r chi.Router) {
+		r.Use(uploading(deps)...)
+
+		r.Post(web.UploadPath, deps.Web.Upload)
+	})
 }
 
 // requesterID возвращает владельца, от имени которого пришёл запрос.
