@@ -16,9 +16,8 @@ import (
 	"github.com/kerpe-l/gophprofile/internal/worker/handler"
 )
 
-// Имена вызовов в журнале. Порядок операций задан спецификацией — ключ
-// миниатюры попадает в базу только после того, как объект оказался
-// в хранилище, — и проверять его по-другому нечем.
+// Имена вызовов в журнале: так проверяется, что ключ попадает в базу только
+// после того, как объект оказался в хранилище.
 const (
 	callGet        = "get"
 	callStatus     = "status:"
@@ -56,10 +55,13 @@ type fakeRepo struct {
 	// avatar — что отдаёт Get.
 	avatar domain.Avatar
 
-	getErr      error
-	statusErr   error
-	completeErr error
-	retryErr    error
+	getErr    error
+	statusErr error
+	// failStatusErr — отказ только на переводе в failed; statusErr сорвал бы
+	// и начало обработки, до которого дело бы не дошло.
+	failStatusErr error
+	completeErr   error
+	retryErr      error
 
 	statuses   []domain.ProcessingStatus
 	completed  map[domain.ThumbnailSize]string
@@ -79,6 +81,10 @@ func (r *fakeRepo) Get(_ context.Context, _ uuid.UUID) (domain.Avatar, error) {
 func (r *fakeRepo) SetProcessingStatus(_ context.Context, _ uuid.UUID, status domain.ProcessingStatus) error {
 	r.log.add(callStatus + string(status))
 	r.statuses = append(r.statuses, status)
+
+	if status == domain.ProcessingStatusFailed && r.failStatusErr != nil {
+		return r.failStatusErr
+	}
 
 	return r.statusErr
 }

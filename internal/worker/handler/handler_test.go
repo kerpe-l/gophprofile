@@ -285,9 +285,64 @@ func TestHandleRetryable(t *testing.T) {
 	}
 }
 
-// Последняя попытка проваливает обработку окончательно: повторов больше
-// не будет, и запись обязана получить терминальный статус до ухода сообщения
-// в очередь мёртвых.
+func TestHandleNonRetryableBecomesRetryableWhenStatusNotWritten(t *testing.T) {
+	t.Parallel()
+
+	avatar := newAvatar()
+	d := newDeps(avatar)
+	d.processor.err = domain.ErrUnsupportedFormat
+	d.repo.failStatusErr = errUnavailable
+
+	err := newHandler(t, d).Handle(t.Context(), uploadMessage(t, avatar))
+
+	require.ErrorIs(t, err, errUnavailable)
+	require.NotErrorIs(t, err, broker.ErrNonRetryable, "иначе сообщение подтвердят и причина потеряется")
+	assert.Contains(t, err.Error(), domain.ErrUnsupportedFormat.Error(), "исходная причина обязана остаться в тексте")
+}
+
+func TestHandleNonRetryableStaysWhenNothingToWrite(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		markErr error
+	}{
+		{name: "avatar deleted", markErr: domain.ErrNotFound},
+		{name: "already terminal", markErr: domain.ErrInvalidTransition},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			avatar := newAvatar()
+			d := newDeps(avatar)
+			d.processor.err = domain.ErrUnsupportedFormat
+			d.repo.failStatusErr = tc.markErr
+
+			err := newHandler(t, d).Handle(t.Context(), uploadMessage(t, avatar))
+			require.ErrorIs(t, err, broker.ErrNonRetryable)
+		})
+	}
+}
+
+func TestHandleFinalAttemptStaysFinalWhenStatusNotWritten(t *testing.T) {
+	t.Parallel()
+
+	avatar := newAvatar()
+	d := newDeps(avatar)
+	d.storage.putErr = errUnavailable
+	d.repo.failStatusErr = errors.New("database is down")
+
+	msg := uploadMessage(t, avatar)
+	msg.Attempt = 5
+	msg.Final = true
+
+	err := newHandler(t, d).Handle(t.Context(), msg)
+	require.ErrorIs(t, err, errUnavailable)
+	assert.Zero(t, d.repo.retryCount, "the last attempt is not retried")
+}
+
 func TestHandleFinalAttempt(t *testing.T) {
 	t.Parallel()
 
@@ -306,8 +361,6 @@ func TestHandleFinalAttempt(t *testing.T) {
 	assert.Zero(t, d.repo.retryCount, "the last attempt is not retried")
 }
 
-// Проверка на настоящем файле: в хранилище обязаны лечь именно миниатюры
-// запрошенных размеров, а не что-нибудь ещё.
 func TestHandleUploadedRealImage(t *testing.T) {
 	t.Parallel()
 
