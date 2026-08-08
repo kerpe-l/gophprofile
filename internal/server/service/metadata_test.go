@@ -48,7 +48,6 @@ func TestListByUser(t *testing.T) {
 	assert.Equal(t, d.repo.list, avatars, "порядок перебора сохраняется")
 }
 
-// TestListByUserEmpty — у пользователя может не быть аватаров, и это не ошибка.
 func TestListByUserEmpty(t *testing.T) {
 	t.Parallel()
 
@@ -61,8 +60,6 @@ func TestListByUserEmpty(t *testing.T) {
 	assert.Empty(t, avatars)
 }
 
-// TestListByUserFails — ошибка перебора прерывает его, а не отдаётся вместе
-// с частью списка: неполный список неотличим от полного.
 func TestListByUserFails(t *testing.T) {
 	t.Parallel()
 

@@ -112,8 +112,6 @@ func TestDeleteCurrentForbidden(t *testing.T) {
 	assert.Empty(t, d.repo.deleted)
 }
 
-// TestDeleteNotFound — удаление идемпотентно: повторный запрос не находит
-// живой записи, потому что мягко удалённые из выборок исключены.
 func TestDeleteNotFound(t *testing.T) {
 	t.Parallel()
 

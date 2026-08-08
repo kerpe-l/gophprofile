@@ -34,7 +34,6 @@ func TestAvatarContent(t *testing.T) {
 	assert.Empty(t, w.Header().Get("X-Avatar-Default"))
 }
 
-// TestAvatarContentNotModified — совпавший валидатор экономит тело ответа.
 func TestAvatarContentNotModified(t *testing.T) {
 	t.Parallel()
 
@@ -89,8 +88,6 @@ func TestAvatarContentNotFound(t *testing.T) {
 	assert.Contains(t, w.Body.String(), "Avatar not found")
 }
 
-// TestAvatarContentUnsupportedSize — неизвестный размер отвергается, а не
-// подменяется молча оригиналом: клиент просил маленький файл.
 func TestAvatarContentUnsupportedSize(t *testing.T) {
 	t.Parallel()
 
@@ -118,8 +115,6 @@ func TestUserAvatarContent(t *testing.T) {
 	assert.Empty(t, w.Header().Get("X-Avatar-Default"))
 }
 
-// TestUserAvatarContentPlaceholder — заглушка помечена заголовком и живёт
-// в кешах минуты, а не сутки: иначе первая загрузка аватара не подхватится.
 func TestUserAvatarContentPlaceholder(t *testing.T) {
 	t.Parallel()
 
@@ -138,8 +133,7 @@ func TestUserAvatarContentPlaceholder(t *testing.T) {
 	assert.Equal(t, "max-age=300", w.Header().Get("Cache-Control"))
 }
 
-// TestContentBodyClosed — тело закрывается в любом исходе: до Close заняты
-// соединение с хранилищем и горутина чтения внутри клиента.
+// До Close заняты соединение с хранилищем и горутина чтения внутри клиента.
 func TestContentBodyClosed(t *testing.T) {
 	t.Parallel()
 

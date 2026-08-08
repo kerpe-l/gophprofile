@@ -121,8 +121,7 @@ func TestAvatarContent(t *testing.T) {
 	}
 }
 
-// TestAvatarContentNotFound — на запрос конкретного аватара заглушка
-// не подставляется: запрошен объект по идентификатору.
+// На запрос по идентификатору заглушка не подставляется.
 func TestAvatarContentNotFound(t *testing.T) {
 	t.Parallel()
 
@@ -175,9 +174,8 @@ func TestUserAvatarContent(t *testing.T) {
 	assert.Equal(t, []string{domain.ThumbnailKey(d.repo.avatar.ID, domain.ThumbnailSmall)}, d.storage.getKeys)
 }
 
-// TestUserAvatarContentFallsBackToPlaceholder — назначение сервиса в том
-// и состоит, чтобы отдать изображение всегда: незавершённая загрузка для
-// стороннего клиента не отличается от отсутствия аватара.
+// Незавершённая загрузка для стороннего клиента не отличается от отсутствия
+// аватара, поэтому и там и там уходит заглушка.
 func TestUserAvatarContentFallsBackToPlaceholder(t *testing.T) {
 	t.Parallel()
 
@@ -230,8 +228,7 @@ func TestUserAvatarContentFallsBackToPlaceholder(t *testing.T) {
 	}
 }
 
-// TestUserAvatarContentPropagatesFailure — заглушка подменяет отсутствующий
-// аватар, а не сломанную зависимость: отказ базы обязан дойти до вызывающего.
+// Заглушка подменяет отсутствующий аватар, но не сломанную зависимость.
 func TestUserAvatarContentPropagatesFailure(t *testing.T) {
 	t.Parallel()
 

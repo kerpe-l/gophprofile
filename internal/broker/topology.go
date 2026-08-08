@@ -79,9 +79,8 @@ func defaultRetryDelays() []time.Duration {
 	}
 }
 
-// newRetryLevels собирает ступени по задержкам: имя очереди и ключ ступени
-// называют её задержку, поэтому лестницу нельзя перенастроить так, чтобы
-// имя очереди разошлось с её временем жизни.
+// newRetryLevels собирает ступени по задержкам. Имя очереди и ключ ступени
+// называют её задержку, разойтись они не могут.
 func newRetryLevels(delays []time.Duration) []retryLevel {
 	levels := make([]retryLevel, 0, len(delays))
 

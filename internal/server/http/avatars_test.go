@@ -85,8 +85,7 @@ func TestUploadFieldNames(t *testing.T) {
 	}
 }
 
-// TestUploadTooLarge — тело обрывается на лимите, а не после вычитывания
-// всего, что прислал клиент.
+// Тело обрывается на лимите, а не после вычитывания всего, что прислал клиент.
 func TestUploadTooLarge(t *testing.T) {
 	t.Parallel()
 
@@ -198,7 +197,6 @@ func TestUploadBadRequests(t *testing.T) {
 	}
 }
 
-// TestErrorMapping — статусы выбирает маппинг доменных ошибок, а не хендлеры.
 func TestErrorMapping(t *testing.T) {
 	t.Parallel()
 
@@ -303,8 +301,6 @@ func TestAvatarMetadata(t *testing.T) {
 	assert.Equal(t, "/api/v1/avatars/"+avatar.ID.String()+"?size=100x100", body.Thumbnails[0].URL)
 }
 
-// TestAvatarMetadataWithoutThumbnails — до конца обработки миниатюр в ответе
-// нет: ссылка на несозданную обещала бы размер, которого клиент не получит.
 func TestAvatarMetadataWithoutThumbnails(t *testing.T) {
 	t.Parallel()
 

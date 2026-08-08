@@ -22,11 +22,8 @@ const (
 
 // Имена компонентов в ответе /health.
 const (
-	// ComponentDB — база метаданных.
-	ComponentDB = "db"
-	// ComponentS3 — объектное хранилище.
-	ComponentS3 = "s3"
-	// ComponentBroker — брокер событий.
+	ComponentDB     = "db"
+	ComponentS3     = "s3"
 	ComponentBroker = "broker"
 )
 
@@ -56,16 +53,13 @@ type Checker interface {
 
 // Deps — зависимости HTTP-слоя.
 type Deps struct {
-	// Service — сценарии работы с аватарами.
 	Service Service
 	// Checks — проверяемые в /health зависимости по именам компонентов.
 	Checks map[string]Checker
-	// HTTP — таймауты обработки запроса.
-	HTTP config.HTTP
-	// MaxUploadBytes — предельный размер тела запроса на загрузку.
+	HTTP   config.HTTP
+	// MaxUploadBytes — предельный размер самого файла, без обвязки multipart.
 	MaxUploadBytes int64
-	// Log — логгер запросов.
-	Log *slog.Logger
+	Log            *slog.Logger
 }
 
 // api — состояние хендлеров.
@@ -76,11 +70,8 @@ type api struct {
 	log       *slog.Logger
 }
 
-// New собирает роутер сервиса.
-//
-// Загрузка идёт отдельной группой: у неё свой предел времени, покрывающий
-// заливку файла целиком, и ограничитель размера тела, которого остальным
-// маршрутам не нужно.
+// New собирает роутер сервиса. Загрузка идёт отдельной группой: у неё свой
+// предел времени на заливку и ограничитель размера тела.
 func New(deps Deps) *chi.Mux {
 	a := &api{
 		svc:       deps.Service,
@@ -123,11 +114,8 @@ func New(deps Deps) *chi.Mux {
 }
 
 // requesterID возвращает владельца, от имени которого пришёл запрос.
-//
-// Заголовок проставляет доверенный gateway, аутентификацией он не является:
-// сервис не выпускает и не проверяет токены, а лишь сверяет владение при
-// удалении. Отсутствие заголовка — некорректный запрос; значение длиннее
-// колонки в базе — тоже.
+// Заголовок проставляет доверенный gateway; аутентификацией сервис
+// не занимается и лишь сверяет владение при удалении.
 func requesterID(r *http.Request) (string, error) {
 	id := r.Header.Get(headerUserID)
 	if id == "" {
@@ -142,8 +130,6 @@ func requesterID(r *http.Request) (string, error) {
 }
 
 // avatarID разбирает идентификатор аватара из пути.
-//
-// Строка, не являющаяся UUID, даёт ошибку разбора.
 func avatarID(r *http.Request) (uuid.UUID, error) {
 	id, err := uuid.Parse(chi.URLParam(r, paramAvatarID))
 	if err != nil {

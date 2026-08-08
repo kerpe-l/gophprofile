@@ -19,9 +19,8 @@ import (
 // uploaded создаёт миниатюры загруженного оригинала.
 //
 // Порядок операций: перевод записи в processing → чтение оригинала →
-// миниатюры в хранилище → ключи и completed одним запросом. Ключ миниатюры
-// появляется в базе только после того, как сам объект оказался в хранилище:
-// обратный порядок разрешил бы раздачу того, чего ещё нет.
+// миниатюры в хранилище → ключи и completed одним запросом. Ключ появляется
+// в базе только после самого объекта, иначе раздача сошлётся на пустоту.
 func (h *Handler) uploaded(ctx context.Context, msg broker.Message) error {
 	var event broker.AvatarUploadEvent
 	if err := json.Unmarshal(msg.Body, &event); err != nil {
@@ -91,9 +90,7 @@ func (h *Handler) start(ctx context.Context, id uuid.UUID) (domain.Avatar, bool,
 	return avatar, true, nil
 }
 
-// done отвечает, закончена ли обработка окончательно. Терминальные статусы
-// повторной обработке не подлежат: за повтор отвечает лестница задержек,
-// а не возврат записи в предыдущий статус.
+// done отвечает, закончена ли обработка окончательно.
 func done(status domain.ProcessingStatus) bool {
 	switch status {
 	case domain.ProcessingStatusCompleted, domain.ProcessingStatusFailed:
@@ -112,8 +109,7 @@ func (h *Handler) process(ctx context.Context, avatar domain.Avatar) error {
 		return err
 	}
 
-	// Порядок размеров фиксирован: набор записанных объектов не должен
-	// зависеть от обхода отображения.
+	// Порядок размеров фиксирован: обход map недетерминирован.
 	keys := make(map[domain.ThumbnailSize]string, len(thumbnails))
 
 	for _, size := range domain.ThumbnailSizes() {
@@ -167,10 +163,8 @@ func (h *Handler) removeThumbnails(ctx context.Context, id uuid.UUID, keys map[d
 }
 
 // render читает оригинал из хранилища и создаёт из него миниатюры, занимая
-// слот декодирования на всё время работы.
-//
-// Ключ берётся из записи, а не из события: где лежит оригинал, знает база,
-// а поля события к моменту обработки могли и устареть.
+// слот декодирования на всё время работы. Ключ берётся из записи: поля
+// события к моменту обработки могли устареть.
 func (h *Handler) render(ctx context.Context, avatar domain.Avatar) (map[domain.ThumbnailSize][]byte, error) {
 	select {
 	case h.decodeSlots <- struct{}{}:
@@ -187,19 +181,16 @@ func (h *Handler) render(ctx context.Context, avatar domain.Avatar) (map[domain.
 
 	thumbnails, err := h.processor.Thumbnails(bytes.NewReader(original), domain.ThumbnailSizes())
 	if err != nil {
-		// Ошибки обработки изображений неисправимы по своей природе:
-		// перекодировать битый JPEG через пять минут не выйдет.
+		// Битый JPEG повтором не чинится.
 		return nil, nonRetryable(fmt.Errorf("make thumbnails of avatar %s: %w", avatar.ID, err))
 	}
 
 	return thumbnails, nil
 }
 
-// readOriginal вычитывает оригинал в память целиком.
-//
-// Целиком — чтобы обрыв связи с хранилищем не выглядел битым файлом: декодер
-// на оборванном потоке отдаёт ту же ошибку формата, что и на испорченном
-// изображении, и такая загрузка получила бы терминальный failed вместо повтора.
+// readOriginal вычитывает оригинал в память целиком: на оборванном потоке
+// декодер отдаёт ту же ошибку формата, что и на битом файле, и обрыв связи
+// получил бы терминальный failed вместо повтора.
 func (h *Handler) readOriginal(ctx context.Context, avatar domain.Avatar) ([]byte, error) {
 	object, err := h.storage.Get(ctx, avatar.S3Key)
 	if err != nil {

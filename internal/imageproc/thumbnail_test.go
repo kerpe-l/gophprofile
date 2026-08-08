@@ -130,8 +130,7 @@ func TestThumbnailsErrors(t *testing.T) {
 	}
 }
 
-// TestThumbnailsUpscales: оригинал меньше миниатюры — размер результата всё
-// равно точный, иначе клиент получит не то, что просил.
+// Оригинал меньше миниатюры: размер результата всё равно точный.
 func TestThumbnailsUpscales(t *testing.T) {
 	t.Parallel()
 

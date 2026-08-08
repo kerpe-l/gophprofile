@@ -8,9 +8,7 @@ type ThumbnailSize string
 
 // Значения ThumbnailSize.
 const (
-	// ThumbnailSmall — миниатюра 100x100.
-	ThumbnailSmall ThumbnailSize = "100x100"
-	// ThumbnailMedium — миниатюра 300x300.
+	ThumbnailSmall  ThumbnailSize = "100x100"
 	ThumbnailMedium ThumbnailSize = "300x300"
 )
 
@@ -25,8 +23,7 @@ const (
 )
 
 // ThumbnailSizes возвращает размеры, в которых создаются миниатюры.
-// Функция, а не переменная пакета: содержимое общего слайса вызывающий
-// мог бы подменить.
+// Функция, а не переменная: общий слайс вызывающий мог бы подменить.
 func ThumbnailSizes() []ThumbnailSize {
 	return []ThumbnailSize{ThumbnailSmall, ThumbnailMedium}
 }
@@ -44,12 +41,9 @@ func (s ThumbnailSize) Dimensions() (width, height int) {
 	}
 }
 
-// ParseThumbnailSize разбирает значение query-параметра size.
-//
-// Пустое значение и "original" означают оригинал: возвращается пустой размер
-// без ошибки. Любое другое нераспознанное значение — ErrUnsupportedSize:
-// молча отдавать оригинал вместо запрошенных 50x50 значит выдавать
-// многомегабайтный файл там, где клиент просил маленький.
+// ParseThumbnailSize разбирает значение query-параметра size. Пустое значение
+// и "original" дают пустой размер без ошибки, любое другое —
+// ErrUnsupportedSize.
 func ParseThumbnailSize(value string) (ThumbnailSize, error) {
 	switch value {
 	case "", SizeOriginal:

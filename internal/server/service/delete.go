@@ -36,18 +36,15 @@ func (s *Service) DeleteCurrent(ctx context.Context, userID, requesterID string)
 }
 
 // remove сверяет владельца, помечает запись удалённой и заказывает воркеру
-// уборку файлов.
-//
-// Файлы в штатном пути удаляются событием, а не здесь: запрос на удаление
-// не должен ждать хранилища, а повторную доставку события воркер переживает —
-// лишнее удаление отсутствующего объекта ошибкой не считается.
+// уборку файлов. Синхронно файлы не удаляются: запрос не должен ждать
+// хранилища.
 func (s *Service) remove(ctx context.Context, avatar domain.Avatar, requesterID string) error {
 	if avatar.UserID != requesterID {
 		return fmt.Errorf("delete avatar %s: %w", avatar.ID, domain.ErrForbidden)
 	}
 
-	// Отвалившийся клиент отменяет контекст, а скрытая запись без события
-	// уборки — файлы, потерянные навсегда.
+	// Скрытая запись без события уборки — файлы, потерянные навсегда,
+	// поэтому ушедший клиент не должен обрывать оставшиеся шаги.
 	ctx = context.WithoutCancel(ctx)
 
 	if err := s.repo.SoftDelete(ctx, avatar.ID); err != nil {
@@ -56,9 +53,8 @@ func (s *Service) remove(ctx context.Context, avatar domain.Avatar, requesterID 
 
 	keys := storageKeys(avatar)
 
-	// Переопубликовать несостоявшееся событие некому: запись уже скрыта.
-	// Поэтому при отказе брокера файлы удаляются синхронно; теряются они
-	// только при одновременном отказе брокера и хранилища.
+	// Переопубликовать событие некому: запись уже скрыта. При отказе брокера
+	// файлы удаляются синхронно.
 	if err := s.publisher.Publish(ctx, broker.NewDeleteEvent(avatar.ID, keys)); err != nil {
 		s.log.WarnContext(ctx, "publish delete event, falling back to direct removal",
 			slog.Any("error", err), slog.String("avatar_id", avatar.ID.String()))
@@ -72,8 +68,8 @@ func (s *Service) remove(ctx context.Context, avatar domain.Avatar, requesterID 
 }
 
 // storageKeys собирает ключи оригинала и миниатюр всех размеров. Ключи
-// миниатюр строятся из идентификатора, а не берутся из записи: воркер мог
-// записать миниатюру уже после её чтения.
+// строятся из идентификатора: воркер мог записать миниатюру уже после
+// чтения записи.
 func storageKeys(avatar domain.Avatar) []string {
 	sizes := domain.ThumbnailSizes()
 	keys := make([]string, 0, len(sizes)+1)

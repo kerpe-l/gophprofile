@@ -18,9 +18,7 @@ import (
 	"github.com/kerpe-l/gophprofile/internal/server/service"
 )
 
-// Имена вызовов в журнале. Порядок операций загрузки задан спецификацией,
-// и проверять его по-другому нечем: фейки не отличают «сделано» от «сделано
-// не в том месте».
+// Имена вызовов в журнале: порядок операций загрузки иначе не проверить.
 const (
 	callValidate   = "validate"
 	callCreate     = "create"
@@ -273,8 +271,7 @@ func newDeps() *deps {
 	}
 }
 
-// newService собирает сервис на фейках. Заглушка настоящая: она не делает
-// I/O и подменять её нечем.
+// newService собирает сервис на фейках; заглушка настоящая — она не делает I/O.
 func newService(t *testing.T, d *deps) *service.Service {
 	t.Helper()
 

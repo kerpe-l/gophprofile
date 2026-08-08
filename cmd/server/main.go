@@ -1,4 +1,4 @@
-// Команда server поднимает REST API и веб-интерфейс GophProfile.
+// Команда server поднимает REST API GophProfile.
 package main
 
 import (
@@ -98,9 +98,7 @@ func run() error {
 }
 
 // deps — зависимости сервера, живущие столько же, сколько процесс.
-//
-// Публикатор отдельного времени жизни не имеет: он открывает канал на
-// соединении с брокером, и закрытие соединения закрывает канал вместе с ним.
+// Публикатор закрывается вместе с соединением брокера.
 type deps struct {
 	repo      *postgres.Repository
 	storage   *s3.Storage
@@ -108,8 +106,7 @@ type deps struct {
 	publisher *broker.Publisher
 }
 
-// setup подключается к зависимостям. Отказ на любом шаге закрывает уже
-// открытое: иначе упавший старт оставляет за собой соединения.
+// setup подключается к зависимостям, закрывая уже открытые при отказе.
 func setup(ctx context.Context, cfg *config.Config, log *slog.Logger) (*deps, error) {
 	d := &deps{}
 

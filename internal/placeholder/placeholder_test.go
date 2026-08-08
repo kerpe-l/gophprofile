@@ -33,8 +33,8 @@ func TestNewImage(t *testing.T) {
 	assert.GreaterOrEqual(t, cfg.Height, 300)
 }
 
-// TestETagStable: ETag заглушки обязан пережить рестарт — иначе кеши
-// перезапрашивают её после каждого деплоя.
+// ETag заглушки обязан пережить рестарт, иначе кеши перезапрашивают её
+// после каждого деплоя.
 func TestETagStable(t *testing.T) {
 	t.Parallel()
 
@@ -45,8 +45,8 @@ func TestETagStable(t *testing.T) {
 	assert.NotContains(t, first.ETag(), `"`, "quoting is the transport's job")
 }
 
-// TestReaderIndependent: раздача идёт из одного экземпляра на все запросы,
-// поэтому второй читатель обязан отдать содержимое целиком, а не остаток.
+// Экземпляр один на все запросы: второй читатель обязан отдать содержимое
+// целиком, а не остаток.
 func TestReaderIndependent(t *testing.T) {
 	t.Parallel()
 

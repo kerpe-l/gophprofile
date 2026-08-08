@@ -44,8 +44,7 @@ func TestUserAvatars(t *testing.T) {
 	assert.Empty(t, body.Avatars[1].Thumbnails)
 }
 
-// TestUserAvatarsEmpty — отсутствие аватаров не ошибка, а пустой список;
-// в JSON он остаётся массивом, а не null.
+// Пустой список обязан остаться в JSON массивом, а не null.
 func TestUserAvatarsEmpty(t *testing.T) {
 	t.Parallel()
 
@@ -74,8 +73,6 @@ func TestDeleteUserAvatar(t *testing.T) {
 	assert.Equal(t, testUserID, svc.gotRequeste)
 }
 
-// TestDeleteUserAvatarForeign — сверку владельца делает сервис, транспорт
-// лишь переводит её отказ в 403.
 func TestDeleteUserAvatarForeign(t *testing.T) {
 	t.Parallel()
 

@@ -135,13 +135,9 @@ func (r *Repository) ListByUser(ctx context.Context, userID string) iter.Seq2[do
 		userID, domain.UploadStatusUploaded)
 }
 
-// SelectStuck перебирает аватары, оригинал которых загружен, а обработка
-// не начиналась, и которые не менялись до момента before, — не более limit штук.
-// Неположительный limit — ошибка: выборка без предела способна вычитать таблицу
-// целиком, а нулевая порция означает, что вызывающий ошибся в расчёте размера.
-//
-// Момент отсечки задаёт вызывающий: часы принадлежат ему, иначе такой перебор
-// нельзя проверить тестом без ожидания реального времени.
+// SelectStuck перебирает аватары, оригинал которых загружен, обработка
+// не начиналась, а запись не менялась до момента before. Отсечку задаёт
+// вызывающий; limit обязан быть положительным.
 func (r *Repository) SelectStuck(
 	ctx context.Context, before time.Time, limit int,
 ) iter.Seq2[domain.Avatar, error] {
@@ -224,8 +220,7 @@ func (r *Repository) SoftDelete(ctx context.Context, id uuid.UUID) error {
 }
 
 // statusStrings переводит статусы в срез строк: в ANY(...) массив уходит
-// как text[], и полагаться на то, что драйвер сам развернёт срез именованного
-// строкового типа, незачем.
+// как text[].
 func statusStrings[S ~string](statuses []S) []string {
 	out := make([]string, len(statuses))
 	for i, status := range statuses {
@@ -235,8 +230,8 @@ func statusStrings[S ~string](statuses []S) []string {
 	return out
 }
 
-// scanAvatar читает одну строку в модель. Принимает pgx.Row, поэтому годится
-// и для одиночного чтения, и для перебора: pgx.Rows его тоже реализует.
+// scanAvatar читает одну строку в модель. Принимает pgx.Row, который
+// реализует и pgx.Rows, поэтому годится и для чтения, и для перебора.
 func scanAvatar(row pgx.Row) (domain.Avatar, error) {
 	var avatar domain.Avatar
 

@@ -73,18 +73,15 @@ var (
 
 // errorResponse — тело ответа об ошибке.
 type errorResponse struct {
-	// Error — краткая формулировка для клиента.
-	Error string `json:"error"`
-	// Details — уточнение, если оно есть.
+	Error   string `json:"error"`
 	Details string `json:"details,omitempty"`
-	// MaxSize — предельный размер загрузки; заполняется только при отказе
-	// по размеру, поэтому omitzero: ноль здесь означал бы запрет загрузки.
+	// MaxSize заполняется только при отказе по размеру, отсюда omitzero:
+	// ноль здесь означал бы запрет загрузки.
 	MaxSize int64 `json:"max_size,omitzero"`
 }
 
-// respond переводит ошибку в ответ клиенту. Всё, что не разобрано в статус
-// явно, отдаётся как внутренняя ошибка и уходит в лог целиком: клиенту
-// подробности не нужны, а найти причину без них нельзя.
+// respond переводит ошибку в ответ клиенту. Неразобранное отдаётся как
+// внутренняя ошибка, а в лог уходит целиком.
 func (a *api) respond(w http.ResponseWriter, r *http.Request, err error) {
 	status, body := a.mapError(err)
 
@@ -188,8 +185,8 @@ func (a *api) mapError(err error) (int, errorResponse) {
 	}
 }
 
-// supportedSizes перечисляет значения параметра size. Список собирается
-// из доменных размеров, чтобы не разойтись с ними при добавлении нового.
+// supportedSizes перечисляет значения параметра size, собирая их из доменных
+// размеров.
 func supportedSizes() string {
 	sizes := domain.ThumbnailSizes()
 	values := make([]string, 0, len(sizes)+1)
@@ -201,10 +198,8 @@ func supportedSizes() string {
 	return strings.Join(append(values, domain.SizeOriginal), ", ")
 }
 
-// writeJSON отдаёт тело ответа в JSON.
-//
-// Ошибка кодирования только логируется: заголовки уже отправлены, статус
-// не поменять, и сообщить о ней клиенту нечем.
+// writeJSON отдаёт тело ответа в JSON. Ошибка кодирования только логируется:
+// заголовки уже отправлены.
 func writeJSON(ctx context.Context, w http.ResponseWriter, log *slog.Logger, status int, body any) {
 	w.Header().Set(headerContentType, contentTypeJSON)
 	w.WriteHeader(status)

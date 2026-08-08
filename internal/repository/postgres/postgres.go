@@ -26,8 +26,7 @@ import (
 // Repository — доступ к таблице аватаров.
 type Repository struct {
 	pool *pgxpool.Pool
-	// queryTimeout — предел на один запрос. Поле, а не константа пакета,
-	// чтобы тест мог подставить своё значение и не ждать реальных секунд.
+	// queryTimeout — предел на один запрос.
 	queryTimeout time.Duration
 }
 
@@ -120,10 +119,9 @@ func (r *Repository) execTransition(ctx context.Context, id uuid.UUID, query str
 }
 
 // transitionError называет причину, по которой перевод статуса не затронул
-// ни одной строки. Второе чтение идёт только по ветке отказа и ни на что
-// не влияет: решение уже принято базой, а гонка с удалением записи между
-// двумя запросами меняет domain.ErrInvalidTransition на domain.ErrNotFound —
-// на тот ответ, который к этому моменту и стал верным.
+// ни одной строки. Второе чтение безопасно: решение уже принято базой, а если
+// запись успели удалить между запросами, ErrInvalidTransition сменится
+// на ErrNotFound — на тот ответ, который к этому моменту и стал верным.
 func (r *Repository) transitionError(ctx context.Context, id uuid.UUID) error {
 	ctx, cancel := r.withDeadline(ctx)
 	defer cancel()
@@ -194,9 +192,8 @@ func (r *Repository) queryMany(ctx context.Context, what, query string, args ...
 	}
 }
 
-// failedSeq — последовательность из одной ошибки. Аргументы перебора
-// проверяются до запроса, а сообщить о них вызывающему можно только
-// через сам перебор.
+// failedSeq — последовательность из одной ошибки: аргументы проверяются
+// до запроса, а сообщить о них можно только через сам перебор.
 func failedSeq(err error) iter.Seq2[domain.Avatar, error] {
 	return func(yield func(domain.Avatar, error) bool) {
 		yield(domain.Avatar{}, err)

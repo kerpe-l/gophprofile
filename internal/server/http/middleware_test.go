@@ -52,7 +52,6 @@ func TestRequestID(t *testing.T) {
 	}
 }
 
-// TestRecovering — паника в хендлере отдаёт 500, а не роняет процесс.
 func TestRecovering(t *testing.T) {
 	t.Parallel()
 
@@ -67,7 +66,6 @@ func TestRecovering(t *testing.T) {
 	assert.NotContains(t, w.Body.String(), "metadata exploded")
 }
 
-// TestUnknownRoute — неизвестный путь отдаёт 404 роутера, а не панику.
 func TestUnknownRoute(t *testing.T) {
 	t.Parallel()
 

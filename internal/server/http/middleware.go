@@ -13,9 +13,8 @@ import (
 	"github.com/kerpe-l/gophprofile/internal/logger"
 )
 
-// maxRequestIDLen — предел длины идентификатора запроса, принимаемого
-// от клиента. Заголовок приходит снаружи и попадает в каждую запись лога;
-// слишком длинное или непечатаемое значение заменяется собственным.
+// maxRequestIDLen — предел длины идентификатора запроса от клиента: значение
+// попадает в каждую запись лога.
 const maxRequestIDLen = 64
 
 // requestID связывает запрос с его идентификатором: кладёт в контекст,
@@ -49,8 +48,7 @@ func validRequestID(id string) bool {
 	return true
 }
 
-// logging пишет одну запись на запрос: с ней видно и код ответа, и время,
-// которое он занял.
+// logging пишет одну запись на запрос — с кодом ответа и длительностью.
 func logging(log *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -129,8 +127,7 @@ func timeout(d time.Duration) func(http.Handler) http.Handler {
 	}
 }
 
-// maxBytes ограничивает размер тела запроса до его разбора: иначе предел
-// сработает только после вычитывания всего, что прислал клиент.
+// maxBytes ограничивает тело запроса до разбора, а не после вычитывания.
 func maxBytes(limit int64) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -141,7 +138,9 @@ func maxBytes(limit int64) func(http.Handler) http.Handler {
 	}
 }
 
-// extendWriteDeadline отодвигает дедлайн записи ответа.
+// extendWriteDeadline отодвигает дедлайн записи ответа. WriteTimeout сервера
+// отсчитывается от конца чтения заголовков, поэтому на медленной заливке
+// он истекает раньше, чем есть что записать.
 func extendWriteDeadline(d time.Duration, log *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

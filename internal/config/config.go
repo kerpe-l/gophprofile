@@ -2,8 +2,7 @@
 //
 // Конфиг один на оба бинарника, но проверяется по-разному: LoadServer и
 // LoadWorker валидируют только те секции, без которых конкретный бинарник
-// работать не может. У секретов нет значений по умолчанию — незаданный
-// секрет валит старт, а не уезжает в продакшн с дефолтом.
+// работать не может. Обязательные секреты не имеют значений по умолчанию.
 package config
 
 import (
@@ -18,9 +17,7 @@ import (
 	"github.com/kerpe-l/gophprofile/internal/logger"
 )
 
-// Имена переменных окружения. Литералы, разбросанные по файлам, при
-// переименовании не вызывают ошибки компиляции — конфиг просто тихо
-// перестаёт читать переменную.
+// Имена переменных окружения.
 const (
 	envAppEnv    = "APP_ENV"
 	envLogLevel  = "LOG_LEVEL"
@@ -61,11 +58,10 @@ const (
 	envWorkerDecodeConcurrency = "WORKER_DECODE_CONCURRENCY"
 )
 
-// Окружения, в которых запускается сервис.
+// Окружения, в которых запускается сервис: от них зависит формат логов —
+// текст локально, JSON в продакшне.
 const (
-	// EnvLocal — локальный запуск: логи в текстовом формате.
-	EnvLocal = "local"
-	// EnvProduction — продакшн: логи в JSON.
+	EnvLocal      = "local"
 	EnvProduction = "production"
 )
 
@@ -86,7 +82,7 @@ const (
 	defaultDBQueryTimeout = 5 * time.Second
 
 	defaultS3Bucket = "avatars"
-	// Регион по умолчанию — тот, который MinIO принимает без настройки;
+	// Регион, который MinIO принимает без настройки.
 	defaultS3Region  = "us-east-1"
 	defaultS3UseSSL  = false
 	defaultS3Timeout = 15 * time.Second
@@ -95,139 +91,107 @@ const (
 	defaultAMQPTimeout  = 10 * time.Second
 
 	defaultImageMaxUploadBytes int64 = 10 << 20 // 10 MB
-	// 10 MB PNG разворачивается в 30000×30000 и кладёт процесс по памяти
-	// раньше, чем сработает лимит на размер файла, — отсюда отдельный лимит
-	// на число пикселей.
+	// Ограничивает память, необходимую для декодирования.
 	defaultImageMaxPixels   int64 = 50_000_000
 	defaultImageJPEGQuality int   = 85
 
-	// Обработка одного сообщения — это чтение оригинала из хранилища,
-	// декодирование до 50 Мпикс, два ресайза и две записи обратно; предел
-	// публикации на это не рассчитан.
+	// Обработка сообщения — это чтение оригинала, декодирование до 50 Мпикс,
+	// два ресайза и две записи обратно.
 	defaultWorkerProcessTimeout = 60 * time.Second
-	// Добор зависших загрузок идёт раз в минуту и отбирает записи, которые
-	// не менялись пять минут: за это время обработка штатного события успевает
-	// и начаться, и закончиться.
+	// За пять минут обработка штатного события успевает начаться и закончиться.
 	defaultWorkerReconcileInterval = time.Minute
 	defaultWorkerStuckAfter        = 5 * time.Minute
 	defaultWorkerReconcileBatch    = 100
-	// Декодирование разворачивает до 50 Мпикс в память; prefetch ограничивает
-	// только доставку, поэтому пиковую память задаёт этот предел.
+	// Пиковую память воркера задаёт это число, а не prefetch.
 	defaultWorkerDecodeConcurrency = 2
 )
 
 // maxJPEGQuality — верхняя граница качества JPEG в пакете image/jpeg.
 const maxJPEGQuality = 100
 
-// Config — конфигурация сервиса целиком.
+// Config — конфигурация сервиса целиком. HTTP нужен только серверу,
+// Worker — только воркеру; остальные секции общие.
 type Config struct {
-	// App — общие настройки приложения и логирования.
-	App App
-	// HTTP — параметры HTTP-сервера; нужны только серверу.
-	HTTP HTTP
-	// DB — доступ к PostgreSQL.
-	DB DB
-	// S3 — доступ к объектному хранилищу.
-	S3 S3
-	// AMQP — доступ к брокеру.
-	AMQP AMQP
-	// Image — лимиты и параметры обработки изображений.
-	Image Image
-	// Worker — параметры обработчика событий; нужны только воркеру.
+	App    App
+	HTTP   HTTP
+	DB     DB
+	S3     S3
+	AMQP   AMQP
+	Image  Image
 	Worker Worker
 }
 
 // App — общие настройки приложения.
 type App struct {
-	// Env — окружение: EnvLocal или EnvProduction.
-	Env string
-	// LogLevel — минимальный уровень записей в логе.
-	LogLevel slog.Level
-	// LogFormat — формат вывода логов.
+	// Env — EnvLocal или EnvProduction.
+	Env       string
+	LogLevel  slog.Level
 	LogFormat logger.Format
 }
 
 // HTTP — параметры HTTP-сервера.
 type HTTP struct {
-	// Addr — адрес прослушивания в формате host:port.
-	Addr string
-	// ReadHeaderTimeout — предел на чтение заголовков запроса.
+	Addr              string
 	ReadHeaderTimeout time.Duration
-	// ReadTimeout — предел на чтение всего запроса, включая тело.
+	// ReadTimeout покрывает чтение всего запроса, включая тело.
 	ReadTimeout time.Duration
-	// WriteTimeout — предел на запись ответа.
-	WriteTimeout time.Duration
-	// IdleTimeout — предел простоя keep-alive соединения.
-	IdleTimeout time.Duration
-	// ShutdownTimeout — сколько ждать завершения активных запросов при остановке.
+	// WriteTimeout отсчитывается от конца чтения заголовков, то есть покрывает
+	// и чтение тела; для загрузки его продлевает отдельный middleware.
+	WriteTimeout    time.Duration
+	IdleTimeout     time.Duration
 	ShutdownTimeout time.Duration
-	// RequestTimeout — предел на обработку одного запроса. На загрузку
-	// не распространяется: её ограничивает ReadTimeout.
+	// RequestTimeout — предел на обработку запроса, кроме загрузки.
 	RequestTimeout time.Duration
 }
 
 // DB — доступ к PostgreSQL.
 type DB struct {
-	// DSN — строка подключения; секрет, значения по умолчанию нет.
-	DSN string
-	// MaxConns — верхняя граница пула соединений.
-	MaxConns int
-	// QueryTimeout — предел на один запрос к БД.
+	// DSN — секрет, значения по умолчанию нет.
+	DSN          string
+	MaxConns     int
 	QueryTimeout time.Duration
 }
 
 // S3 — доступ к объектному хранилищу.
 type S3 struct {
-	// Endpoint — адрес хранилища в формате host:port, без схемы.
+	// Endpoint — host:port без схемы.
 	Endpoint string
-	// AccessKey — идентификатор ключа доступа; секрет.
+	// AccessKey и SecretKey — секреты.
 	AccessKey string
-	// SecretKey — секретный ключ доступа; секрет.
 	SecretKey string
-	// Bucket — бакет для оригиналов и миниатюр.
-	Bucket string
-	// Region — регион хранилища; участвует в подписи запросов.
-	Region string
-	// UseSSL — обращаться к хранилищу по HTTPS.
-	UseSSL bool
-	// Timeout — предел на одну операцию с хранилищем.
-	Timeout time.Duration
+	Bucket    string
+	Region    string
+	UseSSL    bool
+	Timeout   time.Duration
 }
 
 // AMQP — доступ к брокеру.
 type AMQP struct {
-	// URL — строка подключения; содержит учётные данные, поэтому секрет.
-	URL string
-	// Prefetch — сколько сообщений консьюмер берёт не подтверждая.
+	// URL содержит учётные данные, поэтому секрет.
+	URL      string
 	Prefetch int
-	// Timeout — предел на публикацию и на обработку одного сообщения.
+	// Timeout — предел на публикацию; обработку ограничивает Worker.ProcessTimeout.
 	Timeout time.Duration
 }
 
 // Image — лимиты и параметры обработки изображений.
 type Image struct {
-	// MaxUploadBytes — предельный размер загружаемого файла.
 	MaxUploadBytes int64
-	// MaxPixels — предельное число пикселей (ширина·высота) изображения.
-	MaxPixels int64
-	// JPEGQuality — качество JPEG, с которым сохраняются миниатюры.
+	// MaxPixels ограничивает изображение до полного декодирования.
+	MaxPixels   int64
 	JPEGQuality int
 }
 
 // Worker — параметры обработчика событий.
 type Worker struct {
-	// ProcessTimeout — предел на обработку одного сообщения. Отдельный от
-	// AMQP.Timeout: тот рассчитан на публикацию с подтверждением, а создание
-	// миниатюр занимает на порядок больше.
-	ProcessTimeout time.Duration
-	// ReconcileInterval — период добора зависших загрузок.
+	// ProcessTimeout — предел на обработку одного сообщения, отдельный
+	// от AMQP.Timeout.
+	ProcessTimeout    time.Duration
 	ReconcileInterval time.Duration
 	// StuckAfter — возраст, начиная с которого загрузка без начатой обработки
 	// считается зависшей.
-	StuckAfter time.Duration
-	// ReconcileBatch — сколько зависших записей разбирается за один проход.
-	ReconcileBatch int
-	// DecodeConcurrency — сколько изображений обрабатывается одновременно.
+	StuckAfter        time.Duration
+	ReconcileBatch    int
 	DecodeConcurrency int
 }
 

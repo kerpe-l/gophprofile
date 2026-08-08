@@ -15,15 +15,11 @@ import (
 // UploadInput — загружаемое изображение вместе с тем, что о нём известно
 // из запроса.
 type UploadInput struct {
-	// UserID — владелец будущего аватара.
 	UserID string
-	// FileName — имя файла, под которым изображение загрузили. В ключи
-	// хранилища не попадает и хранится только ради метаданных.
+	// FileName в ключи хранилища не попадает, только в метаданные.
 	FileName string
-	// Size — размер файла в байтах.
-	Size int64
-	// File — содержимое файла. Проверка перематывает поток, поэтому он
-	// обязан уметь Seek; закрывает файл вызывающий.
+	Size     int64
+	// File перематывается при проверке; закрывает его вызывающий.
 	File io.ReadSeeker
 }
 
@@ -31,14 +27,13 @@ type UploadInput struct {
 // в очередь на создание миниатюр.
 //
 // Порядок операций: запись в базе (uploading) → объект в хранилище →
-// перевод в uploaded → событие в брокер. Атомарности между тремя системами
-// нет, поэтому запись создаётся первой: упавший после неё процесс оставляет
-// запись без файла, а не файл, на который никто не сошлётся.
+// перевод в uploaded → событие в брокер. Запись создаётся первой: упавший
+// процесс оставляет запись без файла, а не файл без записи.
 //
 // Неподдерживаемый формат даёт domain.ErrUnsupportedFormat, слишком большое
-// изображение — domain.ErrImageTooBig. Отказ хранилища переводит запись
-// в failed и возвращается вызывающему. Отказ публикации загрузку не проваливает:
-// оригинал уже на месте, и застрявшую запись переопубликует reconciler.
+// изображение — domain.ErrImageTooBig, отказ хранилища переводит запись
+// в failed. Отказ публикации загрузку не проваливает: застрявшую запись
+// переопубликует reconciler.
 func (s *Service) Upload(ctx context.Context, in UploadInput) (domain.Avatar, error) {
 	info, err := s.validator.Validate(in.File)
 	if err != nil {
@@ -62,11 +57,6 @@ func (s *Service) Upload(ctx context.Context, in UploadInput) (domain.Avatar, er
 		return domain.Avatar{}, fmt.Errorf("upload avatar of user %s: %w", in.UserID, err)
 	}
 
-	// Клиент, отвалившийся сразу после заливки файла, отменяет контекст
-	// запроса. Работа к этому моменту сделана, и записать её результат нужно
-	// независимо от того, дождался ли он ответа: запись, оставшаяся в uploading
-	// с уже лежащим в хранилище файлом, не подбирается ничем. Предел времени
-	// на эти вызовы ставят репозиторий, хранилище и публикатор.
 	ctx = context.WithoutCancel(ctx)
 
 	if err := s.storage.Put(ctx, key, in.File, in.Size, info.MimeType); err != nil {
@@ -84,9 +74,8 @@ func (s *Service) Upload(ctx context.Context, in UploadInput) (domain.Avatar, er
 	avatar.UploadStatus = domain.UploadStatusUploaded
 
 	if err := s.publisher.Publish(ctx, broker.NewUploadEvent(id, in.UserID, key)); err != nil {
-		// Аватар остаётся uploaded + pending — ровно то состояние, которое
-		// reconciler переопубликует. Заставлять клиента заливать файл заново
-		// ради записи, которая и так будет обработана, незачем.
+		// Аватар остаётся uploaded + pending — состояние, которое подберёт
+		// reconciler.
 		s.log.WarnContext(ctx, "publish upload event",
 			slog.Any("error", err), slog.String("avatar_id", id.String()))
 	}

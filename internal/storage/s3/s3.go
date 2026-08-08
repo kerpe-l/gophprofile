@@ -1,12 +1,7 @@
 // Package s3 хранит оригиналы аватаров и миниатюры в объектном хранилище
 // с S3-совместимым API.
 //
-// Пакет оперирует ключами, а не идентификаторами аватаров: где лежит оригинал
-// и где миниатюра, решает домен. Отсутствие объекта наружу выглядит как
-// domain.ErrNotFound — так же, как отсутствие записи в базе.
-//
-// Тело объекта, который вернул Get, обязано быть закрыто вызывающим: до Close
-// заняты и соединение, и горутина чтения внутри клиента.
+// Пакет оперирует ключами, а не идентификаторами аватаров.
 package s3
 
 import (
@@ -26,39 +21,29 @@ import (
 
 // Параметры клиента, не выведенные в конфиг.
 const (
-	// maxRetries — сколько раз клиент повторяет временную ошибку. Значение
-	// задаётся явно, чтобы поведение не менялось вместе с версией библиотеки.
-	maxRetries = 3
-	// dialTimeout — предел на установку TCP-соединения с хранилищем.
-	dialTimeout = 5 * time.Second
-	// tlsHandshakeTimeout — предел на TLS-хендшейк.
+	// maxRetries задан явно, чтобы не менялся вместе с версией библиотеки.
+	maxRetries          = 3
+	dialTimeout         = 5 * time.Second
 	tlsHandshakeTimeout = 5 * time.Second
-	// responseHeaderTimeout — сколько ждать заголовков ответа после отправки
-	// запроса. Без него зависшее хранилище держит вызов до дедлайна контекста,
-	// вместо того чтобы отвалиться и уйти на повтор.
+	// responseHeaderTimeout — предел на ожидание заголовков ответа: без него
+	// зависшее хранилище держит вызов до дедлайна контекста вместо повтора.
 	responseHeaderTimeout = 10 * time.Second
-	// idleConnTimeout — сколько живёт простаивающее соединение в пуле.
-	idleConnTimeout = 90 * time.Second
-	// maxIdleConnsPerHost — размер пула на хост; хост здесь ровно один.
-	maxIdleConnsPerHost = 16
+	idleConnTimeout       = 90 * time.Second
+	maxIdleConnsPerHost   = 16
 )
 
 // Storage — доступ к бакету с аватарами.
 type Storage struct {
-	client *minio.Client
-	bucket string
-	// transport принадлежит хранилищу: его простаивающие соединения
-	// закрывает Close.
+	client    *minio.Client
+	bucket    string
 	transport *http.Transport
-	// timeout — предел на одну операцию. Поле, а не константа пакета, чтобы
-	// тест мог подставить своё значение и не ждать реальных секунд.
+	// timeout — предел на одну операцию.
 	timeout time.Duration
 }
 
-// New подключается к хранилищу и убеждается, что бакет на месте. Отсутствие
-// бакета — ошибка старта: создаёт его инфраструктура, приложению право
-// на создание бакетов не нужно. Транспорт принадлежит хранилищу: закрывается
-// методом Close и только им.
+// New подключается к хранилищу и убеждается, что бакет на месте; отсутствие
+// бакета — ошибка старта. Транспорт принадлежит хранилищу и закрывается
+// методом Close.
 func New(ctx context.Context, cfg config.S3) (*Storage, error) {
 	transport := newTransport()
 
@@ -106,13 +91,9 @@ func (s *Storage) Ping(ctx context.Context) error {
 	return nil
 }
 
-// checkBucket убеждается, что бакет существует. Создавать его приложение
-// не пытается: бакет заводит инфраструктура (в локальном окружении —
-// одноразовый инициализатор compose), а рантайм с правом на создание бакетов
-// молча заведёт новый пустой при опечатке в имени вместо того, чтобы упасть.
+// checkBucket убеждается, что бакет существует.
 //
-// Отсутствие бакета — обычная ошибка, а не domain.ErrNotFound: это дефект
-// развёртывания, и на «аватара нет» он не похож.
+// Отсутствие бакета — обычная ошибка, а не domain.ErrNotFound.
 func (s *Storage) checkBucket(ctx context.Context) error {
 	ctx, cancel := s.withDeadline(ctx)
 	defer cancel()
@@ -135,9 +116,7 @@ func (s *Storage) withDeadline(ctx context.Context) (context.Context, context.Ca
 	return context.WithTimeout(ctx, s.timeout)
 }
 
-// newTransport собирает транспорт с пределами на каждую фазу запроса.
-// У http.DefaultTransport нет ни предела на TLS-хендшейк, ни предела
-// на ожидание заголовков ответа.
+// newTransport задаёт таймауты и размер пула соединений для S3.
 func newTransport() *http.Transport {
 	return &http.Transport{
 		Proxy:                 http.ProxyFromEnvironment,

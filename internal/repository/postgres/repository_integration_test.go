@@ -32,8 +32,8 @@ const (
 	userBob   = "bob"
 )
 
-// RepositorySuite поднимает базу один раз на весь набор: контейнер стартует
-// секунды, а тестов много. Изоляция — очисткой таблицы перед каждым тестом.
+// RepositorySuite поднимает базу один раз на весь набор; изоляция — очисткой
+// таблицы перед каждым тестом.
 type RepositorySuite struct {
 	suite.Suite
 
@@ -299,9 +299,8 @@ func (s *RepositorySuite) TestSetProcessingStatus() {
 	)
 }
 
-// Загрузка не откатывается назад, а законченная обработка не начинается
-// заново: запрещённый переход обязан отличаться и от успеха, и от отсутствия
-// записи — вызывающему по нему решать, повторять работу или нет.
+// Запрещённый переход обязан отличаться и от успеха, и от отсутствия записи:
+// по нему вызывающий решает, повторять работу или нет.
 func (s *RepositorySuite) TestForbiddenTransitions() {
 	ctx := s.T().Context()
 
@@ -339,9 +338,8 @@ func (s *RepositorySuite) TestForbiddenTransitions() {
 	s.Equal(domain.UploadStatusUploaded, got.UploadStatus)
 }
 
-// Повторная доставка события застаёт запись уже в processing, и обработка
-// начинается заново: иначе после падения обработчика аватар остался бы
-// без миниатюр навсегда.
+// Повторная доставка застаёт запись уже в processing, и обработка начинается
+// заново.
 func (s *RepositorySuite) TestProcessingRestarts() {
 	ctx := s.T().Context()
 	avatar := s.createAvatar(userAlice)
@@ -384,8 +382,7 @@ func (s *RepositorySuite) TestIncrementRetry() {
 	s.Equal(2, got.RetryCount)
 }
 
-// Повторное удаление аватара обязано отличаться от первого: клиенту нужен 404,
-// а не молчаливое подтверждение удаления того, чего уже нет.
+// Повторное удаление обязано отличаться от первого: клиенту нужен 404.
 func (s *RepositorySuite) TestSoftDeleteIsIdempotent() {
 	avatar := s.createAvatar(userAlice)
 
@@ -468,8 +465,7 @@ func (s *RepositorySuite) TestSelectStuckRespectsLimit() {
 	s.Len(s.collect(s.repo.SelectStuck(s.T().Context(), cutoff, 2)), 2)
 }
 
-// Неположительный предел — ошибка вызывающего, а не выборка «сколько
-// найдётся»: до базы такой перебор не доходит.
+// Неположительный предел — ошибка вызывающего; до базы перебор не доходит.
 func (s *RepositorySuite) TestSelectStuckRejectsNonPositiveLimit() {
 	s.createAvatar(userAlice)
 
@@ -486,8 +482,7 @@ func (s *RepositorySuite) TestSelectStuckRejectsNonPositiveLimit() {
 	}
 }
 
-// Отменённый контекст обязан прерывать запрос ошибкой, а не оставлять
-// вызывающего ждать ответа базы.
+// Отменённый контекст обязан прерывать запрос ошибкой, а не подвешивать его.
 func (s *RepositorySuite) TestCanceledContext() {
 	avatar := s.createAvatar(userAlice)
 

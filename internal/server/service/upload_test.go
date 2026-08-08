@@ -165,7 +165,6 @@ func TestUploadCreateFails(t *testing.T) {
 	assert.Equal(t, []string{callValidate, callCreate}, d.log.list())
 }
 
-// TestUploadStatusFails — не переведённая в uploaded запись уходит в failed.
 func TestUploadStatusFails(t *testing.T) {
 	t.Parallel()
 

@@ -94,8 +94,7 @@ type deps struct {
 	publisher *broker.Publisher
 }
 
-// setup подключается к зависимостям. Отказ на любом шаге закрывает уже
-// открытое: иначе упавший старт оставляет за собой соединения.
+// setup подключается к зависимостям, закрывая уже открытые при отказе.
 func setup(ctx context.Context, cfg *config.Config, log *slog.Logger) (*deps, error) {
 	d := &deps{}
 
