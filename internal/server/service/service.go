@@ -44,12 +44,16 @@ type Repository interface {
 
 // Storage — оригиналы и миниатюры в объектном хранилище.
 //
-// Удаления здесь нет: файлы убирает воркер по событию, а не сервер в запросе.
+// Файлы штатно убирает воркер по событию; DeleteMany — запасной путь
+// на случай несостоявшейся публикации.
 type Storage interface {
 	// Put кладёт объект по ключу, перезаписывая существующий.
 	Put(ctx context.Context, key string, r io.Reader, size int64, contentType string) error
 	// Get открывает объект на чтение; отсутствие объекта — domain.ErrNotFound.
 	Get(ctx context.Context, key string) (domain.StoredObject, error)
+	// DeleteMany удаляет объекты одним запросом; отсутствие объекта ошибкой
+	// не считается.
+	DeleteMany(ctx context.Context, keys []string) error
 }
 
 // Publisher — публикация событий обработки.

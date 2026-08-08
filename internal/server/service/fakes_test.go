@@ -22,13 +22,14 @@ import (
 // и проверять его по-другому нечем: фейки не отличают «сделано» от «сделано
 // не в том месте».
 const (
-	callValidate = "validate"
-	callCreate   = "create"
-	callGet      = "get"
-	callPut      = "put"
-	callPublish  = "publish"
-	callDelete   = "delete"
-	callStatus   = "status:"
+	callValidate   = "validate"
+	callCreate     = "create"
+	callGet        = "get"
+	callPut        = "put"
+	callPublish    = "publish"
+	callDelete     = "delete"
+	callDeleteMany = "delete-many"
+	callStatus     = "status:"
 )
 
 // callLog — общий журнал вызовов всех фейков.
@@ -158,16 +159,18 @@ type fakeStorage struct {
 	etag        string
 	contentType string
 
-	putErr error
-	getErr error
+	putErr        error
+	getErr        error
+	deleteManyErr error
 
 	putKey         string
 	putBody        []byte
 	putContentType string
 	// putCtxErr — состояние контекста в момент записи: им проверяется, что
 	// отмена запроса не обрывает уже сделанную работу.
-	putCtxErr error
-	getKeys   []string
+	putCtxErr   error
+	getKeys     []string
+	deletedKeys []string
 }
 
 func (s *fakeStorage) Put(ctx context.Context, key string, r io.Reader, _ int64, contentType string) error {
@@ -202,17 +205,28 @@ func (s *fakeStorage) Get(_ context.Context, key string) (domain.StoredObject, e
 	}, nil
 }
 
+func (s *fakeStorage) DeleteMany(_ context.Context, keys []string) error {
+	s.log.add(callDeleteMany)
+	s.deletedKeys = append(s.deletedKeys, keys...)
+
+	return s.deleteManyErr
+}
+
 // fakePublisher — публикатор, запоминающий отправленные события.
 type fakePublisher struct {
 	log *callLog
 
 	err    error
 	events []broker.Event
+	// ctxErr — состояние контекста в момент публикации: им проверяется, что
+	// отмена запроса не обрывает уже сделанную работу.
+	ctxErr error
 }
 
-func (p *fakePublisher) Publish(_ context.Context, event broker.Event) error {
+func (p *fakePublisher) Publish(ctx context.Context, event broker.Event) error {
 	p.log.add(callPublish)
 	p.events = append(p.events, event)
+	p.ctxErr = ctx.Err()
 
 	return p.err
 }

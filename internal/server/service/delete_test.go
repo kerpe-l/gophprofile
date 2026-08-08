@@ -1,6 +1,7 @@
 package service_test
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -37,8 +38,9 @@ func TestDeleteCurrent(t *testing.T) {
 	assert.Equal(t, []uuid.UUID{d.repo.avatar.ID}, d.repo.deleted)
 }
 
-// TestDeletePublishesEveryKey — файлы убирает воркер по этому событию, и всё,
-// чего в нём нет, останется в хранилище навсегда.
+// TestDeletePublishesEveryKey — ключи миниатюр попадают в событие даже
+// до завершения обработки: воркер мог записать миниатюру уже после чтения
+// записи.
 func TestDeletePublishesEveryKey(t *testing.T) {
 	t.Parallel()
 
@@ -49,24 +51,11 @@ func TestDeletePublishesEveryKey(t *testing.T) {
 	pending.ProcessingStatus = domain.ProcessingStatusPending
 
 	tests := []struct {
-		name     string
-		avatar   domain.Avatar
-		wantKeys []string
+		name   string
+		avatar domain.Avatar
 	}{
-		{
-			name:   "original and thumbnails",
-			avatar: processed,
-			wantKeys: []string{
-				processed.S3Key,
-				domain.ThumbnailKey(processed.ID, domain.ThumbnailSmall),
-				domain.ThumbnailKey(processed.ID, domain.ThumbnailMedium),
-			},
-		},
-		{
-			name:     "original only",
-			avatar:   pending,
-			wantKeys: []string{pending.S3Key},
-		},
+		{name: "original and thumbnails", avatar: processed},
+		{name: "processing not finished", avatar: pending},
 	}
 
 	for _, tc := range tests {
@@ -83,8 +72,14 @@ func TestDeletePublishesEveryKey(t *testing.T) {
 			event, ok := d.publisher.events[0].(broker.AvatarDeleteEvent)
 			require.True(t, ok, "событие удаления")
 
+			wantKeys := []string{
+				tc.avatar.S3Key,
+				domain.ThumbnailKey(tc.avatar.ID, domain.ThumbnailSmall),
+				domain.ThumbnailKey(tc.avatar.ID, domain.ThumbnailMedium),
+			}
+
 			assert.Equal(t, tc.avatar.ID.String(), event.AvatarID)
-			assert.Equal(t, tc.wantKeys, event.S3Keys)
+			assert.Equal(t, wantKeys, event.S3Keys)
 			assert.NotEmpty(t, event.MessageID)
 		})
 	}
@@ -145,9 +140,8 @@ func TestDeleteRepositoryFails(t *testing.T) {
 	assert.Empty(t, d.publisher.events, "уборка файлов живого аватара не заказывается")
 }
 
-// TestDeletePublishFails — в отличие от загрузки, отказ публикации здесь
-// доходит до вызывающего: переопубликовать событие удаления некому,
-// и без него файлы остались бы в хранилище молча.
+// TestDeletePublishFails — при отказе публикации файлы удаляются синхронно:
+// переопубликовать событие удаления некому.
 func TestDeletePublishFails(t *testing.T) {
 	t.Parallel()
 
@@ -156,5 +150,45 @@ func TestDeletePublishFails(t *testing.T) {
 	d.publisher.err = errors.New("broker is unavailable")
 	svc := newService(t, d)
 
-	require.ErrorIs(t, svc.Delete(t.Context(), d.repo.avatar.ID, testUserID), d.publisher.err)
+	require.NoError(t, svc.Delete(t.Context(), d.repo.avatar.ID, testUserID))
+
+	wantKeys := []string{
+		d.repo.avatar.S3Key,
+		domain.ThumbnailKey(d.repo.avatar.ID, domain.ThumbnailSmall),
+		domain.ThumbnailKey(d.repo.avatar.ID, domain.ThumbnailMedium),
+	}
+	assert.Equal(t, wantKeys, d.storage.deletedKeys)
+}
+
+// TestDeletePublishAndStorageFail — брокер и хранилище недоступны разом:
+// ошибка доходит до вызывающего.
+func TestDeletePublishAndStorageFail(t *testing.T) {
+	t.Parallel()
+
+	d := newDeps()
+	d.repo.avatar = storedAvatar()
+	d.publisher.err = errors.New("broker is unavailable")
+	d.storage.deleteManyErr = errors.New("storage is unavailable")
+	svc := newService(t, d)
+
+	require.ErrorIs(t, svc.Delete(t.Context(), d.repo.avatar.ID, testUserID), d.storage.deleteManyErr)
+}
+
+// TestDeleteSurvivesCanceledRequest — событие уборки публикуется
+// и на отменённом контексте запроса.
+func TestDeleteSurvivesCanceledRequest(t *testing.T) {
+	t.Parallel()
+
+	d := newDeps()
+	d.repo.avatar = storedAvatar()
+	svc := newService(t, d)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	require.NoError(t, svc.Delete(ctx, d.repo.avatar.ID, testUserID))
+
+	assert.Equal(t, []uuid.UUID{d.repo.avatar.ID}, d.repo.deleted)
+	assert.Len(t, d.publisher.events, 1)
+	assert.NoError(t, d.publisher.ctxErr, "публикация идёт на неотменяемом контексте")
 }

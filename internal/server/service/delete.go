@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/google/uuid"
 
@@ -37,41 +38,49 @@ func (s *Service) DeleteCurrent(ctx context.Context, userID, requesterID string)
 // remove сверяет владельца, помечает запись удалённой и заказывает воркеру
 // уборку файлов.
 //
-// Файлы удаляются событием, а не здесь: запрос на удаление не должен ждать
-// хранилища, а повторную доставку события воркер переживает — лишнее удаление
-// отсутствующего объекта ошибкой не считается.
+// Файлы в штатном пути удаляются событием, а не здесь: запрос на удаление
+// не должен ждать хранилища, а повторную доставку события воркер переживает —
+// лишнее удаление отсутствующего объекта ошибкой не считается.
 func (s *Service) remove(ctx context.Context, avatar domain.Avatar, requesterID string) error {
 	if avatar.UserID != requesterID {
 		return fmt.Errorf("delete avatar %s: %w", avatar.ID, domain.ErrForbidden)
 	}
 
+	// Отвалившийся клиент отменяет контекст, а скрытая запись без события
+	// уборки — файлы, потерянные навсегда.
+	ctx = context.WithoutCancel(ctx)
+
 	if err := s.repo.SoftDelete(ctx, avatar.ID); err != nil {
 		return fmt.Errorf("delete avatar %s: %w", avatar.ID, err)
 	}
 
-	// Отказ публикации здесь проваливает запрос, в отличие от загрузки:
-	// для несостоявшегося события удаления пути починки нет — удалённые записи
-	// никто не перебирает, и файлы остались бы в хранилище навсегда и молча.
-	// Запись при этом уже помечена удалённой, поэтому повторный запрос даст
-	// domain.ErrNotFound, как и любое повторное удаление.
-	if err := s.publisher.Publish(ctx, broker.NewDeleteEvent(avatar.ID, storageKeys(avatar))); err != nil {
-		return fmt.Errorf("delete avatar %s: %w", avatar.ID, err)
+	keys := storageKeys(avatar)
+
+	// Переопубликовать несостоявшееся событие некому: запись уже скрыта.
+	// Поэтому при отказе брокера файлы удаляются синхронно; теряются они
+	// только при одновременном отказе брокера и хранилища.
+	if err := s.publisher.Publish(ctx, broker.NewDeleteEvent(avatar.ID, keys)); err != nil {
+		s.log.WarnContext(ctx, "publish delete event, falling back to direct removal",
+			slog.Any("error", err), slog.String("avatar_id", avatar.ID.String()))
+
+		if err := s.storage.DeleteMany(ctx, keys); err != nil {
+			return fmt.Errorf("delete files of avatar %s: %w", avatar.ID, err)
+		}
 	}
 
 	return nil
 }
 
-// storageKeys собирает ключи всех файлов аватара: оригинал и созданные
-// миниатюры. Порядок размеров фиксирован — набор ключей не должен зависеть
-// от обхода отображения.
+// storageKeys собирает ключи оригинала и миниатюр всех размеров. Ключи
+// миниатюр строятся из идентификатора, а не берутся из записи: воркер мог
+// записать миниатюру уже после её чтения.
 func storageKeys(avatar domain.Avatar) []string {
-	keys := make([]string, 0, len(avatar.ThumbnailKeys)+1)
+	sizes := domain.ThumbnailSizes()
+	keys := make([]string, 0, len(sizes)+1)
 	keys = append(keys, avatar.S3Key)
 
-	for _, size := range domain.ThumbnailSizes() {
-		if key, ok := avatar.ThumbnailKeys[size]; ok {
-			keys = append(keys, key)
-		}
+	for _, size := range sizes {
+		keys = append(keys, domain.ThumbnailKey(avatar.ID, size))
 	}
 
 	return keys
