@@ -106,6 +106,21 @@ func TestUploadTooLarge(t *testing.T) {
 	assert.InDelta(t, float64(testMaxBytes), body["max_size"], 0)
 }
 
+// TestUploadExactLimit — файл ровно предельного размера принимается:
+// обвязка multipart не отбирает часть лимита у файла.
+func TestUploadExactLimit(t *testing.T) {
+	t.Parallel()
+
+	svc := &fakeService{avatar: completedAvatar()}
+	router := newRouter(t, svc, nil)
+
+	exact := strings.Repeat("x", testMaxBytes)
+	w := do(t, router, uploadRequest(t, formFile{field: "file", filename: "max.png", content: []byte(exact)}))
+
+	require.Equal(t, http.StatusCreated, w.Code)
+	assert.Equal(t, int64(testMaxBytes), svc.uploadInput.Size)
+}
+
 func TestUploadBadRequests(t *testing.T) {
 	t.Parallel()
 
@@ -141,6 +156,29 @@ func TestUploadBadRequests(t *testing.T) {
 				r.Header.Set("X-User-ID", testUserID)
 
 				return r
+			},
+		},
+		{
+			name: "user id longer than its column",
+			request: func(t *testing.T) *http.Request {
+				t.Helper()
+
+				r := uploadRequest(t, formFile{field: "file", filename: "a.png", content: []byte("x")})
+				r.Header.Set("X-User-ID", strings.Repeat("u", 256))
+
+				return r
+			},
+		},
+		{
+			name: "file name longer than its column",
+			request: func(t *testing.T) *http.Request {
+				t.Helper()
+
+				return uploadRequest(t, formFile{
+					field:    "file",
+					filename: strings.Repeat("f", 256) + ".png",
+					content:  []byte("x"),
+				})
 			},
 		},
 	}

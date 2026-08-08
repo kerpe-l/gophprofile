@@ -130,14 +130,8 @@ func (s *Storage) checkBucket(ctx context.Context) error {
 }
 
 // withDeadline — единственное место, где на обращение к хранилищу ставится
-// предел времени: его зовут все методы, кроме Get, и новый метод не может
-// о нём забыть. Дедлайн вызывающего не перебивается — тот, кто выше по стеку,
-// знает про общий бюджет операции больше.
+// предел времени: его зовут все методы, кроме Get.
 func (s *Storage) withDeadline(ctx context.Context) (context.Context, context.CancelFunc) {
-	if _, ok := ctx.Deadline(); ok {
-		return context.WithCancel(ctx)
-	}
-
 	return context.WithTimeout(ctx, s.timeout)
 }
 

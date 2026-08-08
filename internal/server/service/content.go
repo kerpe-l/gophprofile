@@ -20,7 +20,8 @@ const (
 	// не меняется: новая загрузка порождает новый аватар.
 	cacheReady = 24 * time.Hour
 	// cachePending — оригинал вместо ещё не созданной миниатюры. Кеш короткий,
-	// иначе клиент не увидит готовую миниатюру до конца суток.
+	// иначе клиент не увидит готовую миниатюру до конца суток. На терминальный
+	// failed не распространяется: там подмена постоянна.
 	cachePending = time.Minute
 	// cachePlaceholder — заглушка. Кеш короткий по той же причине: иначе
 	// первая загрузка аватара не подхватится теми, кто уже спросил.
@@ -104,7 +105,7 @@ func (s *Service) content(ctx context.Context, avatar domain.Avatar, size domain
 	if size != "" {
 		if thumbnail, ok := avatar.Thumbnail(size); ok {
 			key = thumbnail
-		} else {
+		} else if avatar.ProcessingStatus != domain.ProcessingStatusFailed {
 			maxAge = cachePending
 		}
 	}

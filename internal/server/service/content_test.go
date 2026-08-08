@@ -47,6 +47,10 @@ func TestAvatarContent(t *testing.T) {
 	pending.ThumbnailKeys = nil
 	pending.ProcessingStatus = domain.ProcessingStatusPending
 
+	failed := storedAvatar()
+	failed.ThumbnailKeys = nil
+	failed.ProcessingStatus = domain.ProcessingStatusFailed
+
 	tests := []struct {
 		name       string
 		avatar     domain.Avatar
@@ -76,6 +80,14 @@ func TestAvatarContent(t *testing.T) {
 			size:       domain.ThumbnailMedium,
 			wantKey:    pending.S3Key,
 			wantMaxAge: time.Minute,
+		},
+		{
+			// Терминальный failed: подмена постоянна, кеш обычный.
+			name:       "processing failed for good",
+			avatar:     failed,
+			size:       domain.ThumbnailMedium,
+			wantKey:    failed.S3Key,
+			wantMaxAge: 24 * time.Hour,
 		},
 	}
 

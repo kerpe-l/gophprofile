@@ -40,6 +40,18 @@ func (a *api) upload(w http.ResponseWriter, r *http.Request) {
 
 	defer a.closeForm(r, file)
 
+	if header.Size > a.maxUpload {
+		a.respond(w, r, fmt.Errorf("upload of %d bytes: %w", header.Size, domain.ErrTooLarge))
+
+		return
+	}
+
+	if len(header.Filename) > maxFileNameLen {
+		a.respond(w, r, errFileNameTooLong)
+
+		return
+	}
+
 	avatar, err := a.svc.Upload(r.Context(), service.UploadInput{
 		UserID:   userID,
 		FileName: header.Filename,

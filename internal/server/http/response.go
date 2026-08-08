@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -26,6 +27,17 @@ const (
 	paramUserID   = "user_id"
 	paramSize     = "size"
 )
+
+// Пределы длины значений, попадающих в колонки базы: длиннее — 400, а не 500
+// на вставке.
+const (
+	maxUserIDLen   = 255
+	maxFileNameLen = 255
+)
+
+// multipartOverheadBytes — запас на boundary и заголовки полей формы, чтобы
+// файл ровно предельного размера проходил ограничитель тела.
+const multipartOverheadBytes = 64 << 10
 
 // contentTypeJSON — тип тела ответов API.
 const contentTypeJSON = "application/json; charset=utf-8"
@@ -53,6 +65,10 @@ var (
 	errMissingFile = errors.New("missing file field")
 	// errMalformedBody — тело не разбирается как multipart/form-data.
 	errMalformedBody = errors.New("malformed multipart body")
+	// errUserIDTooLong — идентификатор пользователя длиннее своей колонки.
+	errUserIDTooLong = errors.New("user id is too long")
+	// errFileNameTooLong — имя файла длиннее своей колонки.
+	errFileNameTooLong = errors.New("file name is too long")
 )
 
 // errorResponse — тело ответа об ошибке.
@@ -145,6 +161,18 @@ func (a *api) mapError(err error) (int, errorResponse) {
 		return http.StatusBadRequest, errorResponse{
 			Error:   messageBadRequest,
 			Details: "Body must be multipart/form-data",
+		}
+
+	case errors.Is(err, errUserIDTooLong):
+		return http.StatusBadRequest, errorResponse{
+			Error:   messageBadRequest,
+			Details: fmt.Sprintf("%s must be at most %d characters", headerUserID, maxUserIDLen),
+		}
+
+	case errors.Is(err, errFileNameTooLong):
+		return http.StatusBadRequest, errorResponse{
+			Error:   messageBadRequest,
+			Details: fmt.Sprintf("File name must be at most %d characters", maxFileNameLen),
 		}
 
 	case errors.Is(err, domain.ErrInvalidTransition):

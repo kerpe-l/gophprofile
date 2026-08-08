@@ -81,14 +81,9 @@ func (r *Repository) Ping(ctx context.Context) error {
 }
 
 // withDeadline — единственное место, где на обращение к базе ставится предел
-// времени: его зовут все хелперы доступа, и новый метод не может о нём забыть.
-// Дедлайн вызывающего не перебивается — тот, кто выше по стеку, знает
-// про общий бюджет запроса больше.
+// времени: его зовут все хелперы доступа. Ставится безусловно — WithTimeout
+// не продлевает более ранний дедлайн вызывающего.
 func (r *Repository) withDeadline(ctx context.Context) (context.Context, context.CancelFunc) {
-	if _, ok := ctx.Deadline(); ok {
-		return context.WithCancel(ctx)
-	}
-
 	return context.WithTimeout(ctx, r.queryTimeout)
 }
 

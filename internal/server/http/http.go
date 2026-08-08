@@ -96,7 +96,13 @@ func New(deps Deps) *chi.Mux {
 
 	r.Route(apiPrefix, func(r chi.Router) {
 		r.Group(func(r chi.Router) {
-			r.Use(maxBytes(deps.MaxUploadBytes), timeout(deps.HTTP.ReadTimeout))
+			// Предел тела — размер файла плюс запас на обвязку multipart;
+			// сам файл сверяется с пределом в хендлере.
+			r.Use(
+				maxBytes(deps.MaxUploadBytes+multipartOverheadBytes),
+				timeout(deps.HTTP.ReadTimeout),
+				extendWriteDeadline(deps.HTTP.ReadTimeout+deps.HTTP.WriteTimeout, deps.Log),
+			)
 			r.Post("/avatars", a.upload)
 		})
 
@@ -120,11 +126,16 @@ func New(deps Deps) *chi.Mux {
 //
 // Заголовок проставляет доверенный gateway, аутентификацией он не является:
 // сервис не выпускает и не проверяет токены, а лишь сверяет владение при
-// удалении. Отсутствие заголовка — некорректный запрос.
+// удалении. Отсутствие заголовка — некорректный запрос; значение длиннее
+// колонки в базе — тоже.
 func requesterID(r *http.Request) (string, error) {
 	id := r.Header.Get(headerUserID)
 	if id == "" {
 		return "", errMissingUserID
+	}
+
+	if len(id) > maxUserIDLen {
+		return "", errUserIDTooLong
 	}
 
 	return id, nil

@@ -224,13 +224,9 @@ func dial(ctx context.Context, network, addr string) (net.Conn, error) {
 	return conn, nil
 }
 
-// withDeadline ставит предел времени, не перебивая дедлайн вызывающего:
-// тот, кто выше по стеку, знает про общий бюджет операции больше.
+// withDeadline ставит предел времени на операцию с брокером. Ставится
+// безусловно — WithTimeout не продлевает более ранний дедлайн вызывающего.
 func withDeadline(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
-	if _, ok := ctx.Deadline(); ok {
-		return context.WithCancel(ctx)
-	}
-
 	return context.WithTimeout(ctx, timeout)
 }
 

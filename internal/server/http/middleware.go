@@ -141,6 +141,21 @@ func maxBytes(limit int64) func(http.Handler) http.Handler {
 	}
 }
 
+// extendWriteDeadline отодвигает дедлайн записи ответа.
+func extendWriteDeadline(d time.Duration, log *slog.Logger) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if err := http.NewResponseController(w).SetWriteDeadline(time.Now().Add(d)); err != nil {
+				// Без продления запрос всё равно обрабатывается — не запишется
+				// разве что ответ на самую медленную заливку.
+				log.WarnContext(r.Context(), "extend write deadline", slog.Any("error", err))
+			}
+
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 // recorder запоминает код ответа и объём тела для записи в лог.
 type recorder struct {
 	http.ResponseWriter
@@ -176,4 +191,9 @@ func (r *recorder) Write(b []byte) (int, error) {
 // есть ли ещё смысл писать тело с ошибкой.
 func (r *recorder) headerWritten() bool {
 	return r.wrote
+}
+
+// Unwrap открывает http.ResponseController доступ к исходному ResponseWriter.
+func (r *recorder) Unwrap() http.ResponseWriter {
+	return r.ResponseWriter
 }
