@@ -121,6 +121,15 @@ func (s *RepositorySuite) createAvatar(userID string) domain.Avatar {
 	return avatar
 }
 
+// createUploadedAvatar создаёт запись, видимую в GetCurrent и ListByUser.
+func (s *RepositorySuite) createUploadedAvatar(userID string) domain.Avatar {
+	avatar := s.createAvatar(userID)
+	s.Require().NoError(s.repo.SetUploadStatus(s.T().Context(), avatar.ID, domain.UploadStatusUploaded))
+	avatar.UploadStatus = domain.UploadStatusUploaded
+
+	return avatar
+}
+
 func (s *RepositorySuite) collect(seq iter.Seq2[domain.Avatar, error]) []domain.Avatar {
 	var avatars []domain.Avatar
 
@@ -174,9 +183,9 @@ func (s *RepositorySuite) TestGetUnknownAvatar() {
 }
 
 func (s *RepositorySuite) TestGetCurrentReturnsLatest() {
-	older := s.createAvatar(userAlice)
-	newer := s.createAvatar(userAlice)
-	foreign := s.createAvatar(userBob)
+	older := s.createUploadedAvatar(userAlice)
+	newer := s.createUploadedAvatar(userAlice)
+	foreign := s.createUploadedAvatar(userBob)
 
 	// Порядок задаётся явно: две вставки подряд могут получить NOW()
 	// с разницей в микросекунды, и тест начнёт зависеть от неё.
@@ -196,11 +205,34 @@ func (s *RepositorySuite) TestGetCurrentReturnsLatest() {
 	s.Require().ErrorIs(err, domain.ErrNotFound)
 }
 
+// Неудачная или незавершённая новая загрузка не заслоняет рабочий аватар:
+// в выборки попадают только записи с загруженным оригиналом.
+func (s *RepositorySuite) TestGetCurrentSkipsUnfinishedUploads() {
+	working := s.createUploadedAvatar(userAlice)
+
+	failed := s.createAvatar(userAlice)
+	s.Require().NoError(s.repo.SetUploadStatus(s.T().Context(), failed.ID, domain.UploadStatusFailed))
+
+	uploading := s.createAvatar(userAlice)
+
+	s.execSQL(`UPDATE avatars SET created_at = $2 WHERE id = $1`, working.ID, time.Now().Add(-time.Hour))
+	s.execSQL(`UPDATE avatars SET created_at = $2 WHERE id = $1`, failed.ID, time.Now().Add(-time.Minute))
+	s.execSQL(`UPDATE avatars SET created_at = $2 WHERE id = $1`, uploading.ID, time.Now())
+
+	current, err := s.repo.GetCurrent(s.T().Context(), userAlice)
+	s.Require().NoError(err)
+	s.Equal(working.ID, current.ID)
+
+	avatars := s.collect(s.repo.ListByUser(s.T().Context(), userAlice))
+	s.Require().Len(avatars, 1)
+	s.Equal(working.ID, avatars[0].ID)
+}
+
 func (s *RepositorySuite) TestListByUserOrdersNewestFirst() {
-	first := s.createAvatar(userAlice)
-	second := s.createAvatar(userAlice)
-	deleted := s.createAvatar(userAlice)
-	s.createAvatar(userBob)
+	first := s.createUploadedAvatar(userAlice)
+	second := s.createUploadedAvatar(userAlice)
+	deleted := s.createUploadedAvatar(userAlice)
+	s.createUploadedAvatar(userBob)
 
 	s.execSQL(`UPDATE avatars SET created_at = $2 WHERE id = $1`, first.ID, time.Now().Add(-time.Hour))
 	s.execSQL(`UPDATE avatars SET created_at = $2 WHERE id = $1`, second.ID, time.Now().Add(-time.Minute))
@@ -221,7 +253,7 @@ func (s *RepositorySuite) TestListByUserEmpty() {
 // соединение: следующий запрос обязан пройти.
 func (s *RepositorySuite) TestListByUserStopsEarly() {
 	for range 3 {
-		s.createAvatar(userAlice)
+		s.createUploadedAvatar(userAlice)
 	}
 
 	seen := 0
@@ -362,7 +394,7 @@ func (s *RepositorySuite) TestSoftDeleteIsIdempotent() {
 }
 
 func (s *RepositorySuite) TestDeletedAvatarIsInvisible() {
-	avatar := s.createAvatar(userAlice)
+	avatar := s.createUploadedAvatar(userAlice)
 	s.Require().NoError(s.repo.SoftDelete(s.T().Context(), avatar.ID))
 
 	_, err := s.repo.Get(s.T().Context(), avatar.ID)

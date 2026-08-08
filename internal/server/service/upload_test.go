@@ -165,6 +165,7 @@ func TestUploadCreateFails(t *testing.T) {
 	assert.Equal(t, []string{callValidate, callCreate}, d.log.list())
 }
 
+// TestUploadStatusFails — не переведённая в uploaded запись уходит в failed.
 func TestUploadStatusFails(t *testing.T) {
 	t.Parallel()
 
@@ -176,6 +177,9 @@ func TestUploadStatusFails(t *testing.T) {
 	require.ErrorIs(t, err, d.repo.statusErr)
 
 	assert.Empty(t, d.publisher.events, "событие о записи в неизвестном статусе не отправляется")
+	assert.Equal(t,
+		[]domain.UploadStatus{domain.UploadStatusUploaded, domain.UploadStatusFailed},
+		d.repo.statuses, "после отказа запись переводится в failed")
 }
 
 // TestUploadSurvivesPublishFailure — оригинал уже в хранилище, запись

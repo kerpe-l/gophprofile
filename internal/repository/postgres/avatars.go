@@ -34,18 +34,18 @@ const (
 		FROM avatars
 		WHERE id = $1 AND deleted_at IS NULL`
 
-	// Актуальный аватар пользователя — последний созданный из живых.
+	// Актуальный аватар — последний из живых с загруженным оригиналом.
 	getCurrentAvatarQuery = `
 		SELECT ` + avatarColumns + `
 		FROM avatars
-		WHERE user_id = $1 AND deleted_at IS NULL
+		WHERE user_id = $1 AND deleted_at IS NULL AND upload_status = $2
 		ORDER BY created_at DESC
 		LIMIT 1`
 
 	listUserAvatarsQuery = `
 		SELECT ` + avatarColumns + `
 		FROM avatars
-		WHERE user_id = $1 AND deleted_at IS NULL
+		WHERE user_id = $1 AND deleted_at IS NULL AND upload_status = $2
 		ORDER BY created_at DESC`
 
 	// Зависшие загрузки: оригинал в хранилище лежит, а обработка так и не
@@ -116,9 +116,10 @@ func (r *Repository) Get(ctx context.Context, id uuid.UUID) (domain.Avatar, erro
 }
 
 // GetCurrent возвращает актуальный аватар пользователя — последний созданный
-// среди неудалённых. Если живых аватаров нет — domain.ErrNotFound.
+// среди неудалённых с загруженным оригиналом. Если таких нет —
+// domain.ErrNotFound.
 func (r *Repository) GetCurrent(ctx context.Context, userID string) (domain.Avatar, error) {
-	avatar, err := r.queryOne(ctx, getCurrentAvatarQuery, userID)
+	avatar, err := r.queryOne(ctx, getCurrentAvatarQuery, userID, domain.UploadStatusUploaded)
 	if err != nil {
 		return domain.Avatar{}, fmt.Errorf("get current avatar of user %s: %w", userID, err)
 	}
@@ -126,11 +127,12 @@ func (r *Repository) GetCurrent(ctx context.Context, userID string) (domain.Avat
 	return avatar, nil
 }
 
-// ListByUser перебирает живые аватары пользователя от новых к старым.
-// Перебор прекращается на первой ошибке; пустая последовательность означает,
-// что аватаров нет, — это не ошибка.
+// ListByUser перебирает живые аватары пользователя с загруженным оригиналом
+// от новых к старым. Перебор прекращается на первой ошибке; пустая
+// последовательность означает, что аватаров нет, — это не ошибка.
 func (r *Repository) ListByUser(ctx context.Context, userID string) iter.Seq2[domain.Avatar, error] {
-	return r.queryMany(ctx, "list avatars of user "+userID, listUserAvatarsQuery, userID)
+	return r.queryMany(ctx, "list avatars of user "+userID, listUserAvatarsQuery,
+		userID, domain.UploadStatusUploaded)
 }
 
 // SelectStuck перебирает аватары, оригинал которых загружен, а обработка

@@ -76,6 +76,8 @@ func (s *Service) Upload(ctx context.Context, in UploadInput) (domain.Avatar, er
 	}
 
 	if err := s.repo.SetUploadStatus(ctx, id, domain.UploadStatusUploaded); err != nil {
+		s.markFailed(ctx, id)
+
 		return domain.Avatar{}, fmt.Errorf("upload avatar %s: %w", id, err)
 	}
 
@@ -92,12 +94,7 @@ func (s *Service) Upload(ctx context.Context, in UploadInput) (domain.Avatar, er
 	return avatar, nil
 }
 
-// markFailed переводит запись в failed после неудачной загрузки оригинала.
-//
-// Ошибку перевода возвращать некому: наружу уходит отказ хранилища, ради
-// которого сюда и пришли, и подменять его причиной второго порядка значило бы
-// потерять исходную. Запись остаётся в uploading без файла — состояние,
-// которое ничего не отдаёт клиенту и никем не подбирается.
+// markFailed переводит запись в failed после сорвавшейся загрузки.
 func (s *Service) markFailed(ctx context.Context, id uuid.UUID) {
 	if err := s.repo.SetUploadStatus(ctx, id, domain.UploadStatusFailed); err != nil {
 		s.log.ErrorContext(ctx, "mark upload failed",
