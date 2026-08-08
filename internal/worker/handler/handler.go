@@ -66,20 +66,30 @@ type Handler struct {
 	// maxOriginalBytes — предел на объём, который обработчик вычитывает
 	// из хранилища в память.
 	maxOriginalBytes int64
-	log              *slog.Logger
+	// decodeSlots ограничивает одновременные декодирования: prefetch
+	// консьюмера пиковую память не ограничивает.
+	decodeSlots chan struct{}
+	log         *slog.Logger
 }
 
 // New собирает обработчик из его зависимостей.
 //
-// maxOriginalBytes ограничивает размер оригинала, который обработчик готов
-// принять из хранилища: объект большего размера туда не клали, и разворачивать
-// его в память незачем.
-func New(repo Repository, storage Storage, processor Processor, maxOriginalBytes int64, log *slog.Logger) *Handler {
+// maxOriginalBytes ограничивает размер оригинала, вычитываемого из хранилища;
+// decodeConcurrency — число одновременных декодирований, минимум одно.
+func New(
+	repo Repository, storage Storage, processor Processor,
+	maxOriginalBytes int64, decodeConcurrency int, log *slog.Logger,
+) *Handler {
+	if decodeConcurrency < 1 {
+		decodeConcurrency = 1
+	}
+
 	return &Handler{
 		repo:             repo,
 		storage:          storage,
 		processor:        processor,
 		maxOriginalBytes: maxOriginalBytes,
+		decodeSlots:      make(chan struct{}, decodeConcurrency),
 		log:              log,
 	}
 }

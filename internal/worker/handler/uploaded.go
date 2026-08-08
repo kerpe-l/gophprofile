@@ -136,8 +136,9 @@ func (h *Handler) process(ctx context.Context, avatar domain.Avatar) error {
 
 	switch {
 	case errors.Is(err, domain.ErrNotFound), errors.Is(err, domain.ErrInvalidTransition):
-		// Запись удалили или завершили, пока шли миниатюры. Повторять нечего:
-		// следующая попытка застанет то же самое.
+		// Запись удалили или завершили, пока шли миниатюры.
+		h.removeThumbnails(ctx, avatar.ID, keys)
+
 		return nonRetryable(fmt.Errorf("complete processing of avatar %s: %w", avatar.ID, err))
 	case err != nil:
 		return fmt.Errorf("complete processing of avatar %s: %w", avatar.ID, err)
@@ -146,11 +147,39 @@ func (h *Handler) process(ctx context.Context, avatar domain.Avatar) error {
 	return nil
 }
 
-// render читает оригинал из хранилища и создаёт из него миниатюры.
+// removeThumbnails убирает миниатюры, записанные для исчезнувшей записи.
+func (h *Handler) removeThumbnails(ctx context.Context, id uuid.UUID, keys map[domain.ThumbnailSize]string) {
+	if len(keys) == 0 {
+		return
+	}
+
+	orphans := make([]string, 0, len(keys))
+	for _, size := range domain.ThumbnailSizes() {
+		if key, ok := keys[size]; ok {
+			orphans = append(orphans, key)
+		}
+	}
+
+	if err := h.storage.DeleteMany(ctx, orphans); err != nil {
+		h.log.WarnContext(ctx, "remove orphaned thumbnails",
+			slog.Any("error", err), slog.String("avatar_id", id.String()))
+	}
+}
+
+// render читает оригинал из хранилища и создаёт из него миниатюры, занимая
+// слот декодирования на всё время работы.
 //
 // Ключ берётся из записи, а не из события: где лежит оригинал, знает база,
 // а поля события к моменту обработки могли и устареть.
 func (h *Handler) render(ctx context.Context, avatar domain.Avatar) (map[domain.ThumbnailSize][]byte, error) {
+	select {
+	case h.decodeSlots <- struct{}{}:
+	case <-ctx.Done():
+		return nil, fmt.Errorf("wait for decode slot for avatar %s: %w", avatar.ID, ctx.Err())
+	}
+
+	defer func() { <-h.decodeSlots }()
+
 	original, err := h.readOriginal(ctx, avatar)
 	if err != nil {
 		return nil, err

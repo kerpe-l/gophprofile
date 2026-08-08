@@ -220,6 +220,38 @@ func TestHandleNonRetryable(t *testing.T) {
 	}
 }
 
+// Запись исчезла, пока писались миниатюры: событие удаления их не застало,
+// поэтому обработчик убирает их за собой сам.
+func TestHandleUploadedRemovesOrphanedThumbnails(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		completeErr error
+	}{
+		{name: "avatar deleted", completeErr: domain.ErrNotFound},
+		{name: "processing finished elsewhere", completeErr: domain.ErrInvalidTransition},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			avatar := newAvatar()
+			d := newDeps(avatar)
+			d.repo.completeErr = tc.completeErr
+
+			err := newHandler(t, d).Handle(t.Context(), uploadMessage(t, avatar))
+			require.ErrorIs(t, err, broker.ErrNonRetryable)
+
+			assert.Equal(t, []string{
+				domain.ThumbnailKey(avatar.ID, domain.ThumbnailSmall),
+				domain.ThumbnailKey(avatar.ID, domain.ThumbnailMedium),
+			}, d.storage.deleted)
+		})
+	}
+}
+
 // Временный отказ зависимости уходит на повтор: статус остаётся рабочим,
 // счётчик попыток растёт.
 func TestHandleRetryable(t *testing.T) {
@@ -289,7 +321,7 @@ func TestHandleUploadedRealImage(t *testing.T) {
 	h := handler.New(d.repo, d.storage, imageproc.New(config.Image{
 		MaxPixels:   50_000_000,
 		JPEGQuality: 85,
-	}), maxOriginalBytes, slog.New(slog.DiscardHandler))
+	}), maxOriginalBytes, 2, slog.New(slog.DiscardHandler))
 
 	require.NoError(t, h.Handle(t.Context(), uploadMessage(t, avatar)))
 	require.Len(t, d.storage.puts, 2)

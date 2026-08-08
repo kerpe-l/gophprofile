@@ -139,7 +139,8 @@ func setup(ctx context.Context, cfg *config.Config, log *slog.Logger) (*deps, er
 
 // handler собирает обработчик событий поверх открытых зависимостей.
 func (d *deps) handler(cfg *config.Config, log *slog.Logger) *handler.Handler {
-	return handler.New(d.repo, d.storage, imageproc.New(cfg.Image), cfg.Image.MaxUploadBytes, log)
+	return handler.New(d.repo, d.storage, imageproc.New(cfg.Image),
+		cfg.Image.MaxUploadBytes, cfg.Worker.DecodeConcurrency, log)
 }
 
 // reconciler собирает добор зависших загрузок поверх открытых зависимостей.

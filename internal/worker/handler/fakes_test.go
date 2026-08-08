@@ -234,7 +234,7 @@ func newDeps(avatar domain.Avatar) *deps {
 func newHandler(t *testing.T, d *deps) *handler.Handler {
 	t.Helper()
 
-	return handler.New(d.repo, d.storage, d.processor, maxOriginalBytes, slog.New(slog.DiscardHandler))
+	return handler.New(d.repo, d.storage, d.processor, maxOriginalBytes, 2, slog.New(slog.DiscardHandler))
 }
 
 // newAvatar — запись, готовая к обработке: оригинал загружен, миниатюр нет.

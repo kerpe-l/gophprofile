@@ -58,6 +58,7 @@ const (
 	envWorkerReconcileInterval = "WORKER_RECONCILE_INTERVAL"
 	envWorkerStuckAfter        = "WORKER_STUCK_AFTER"
 	envWorkerReconcileBatch    = "WORKER_RECONCILE_BATCH"
+	envWorkerDecodeConcurrency = "WORKER_DECODE_CONCURRENCY"
 )
 
 // Окружения, в которых запускается сервис.
@@ -110,6 +111,9 @@ const (
 	defaultWorkerReconcileInterval = time.Minute
 	defaultWorkerStuckAfter        = 5 * time.Minute
 	defaultWorkerReconcileBatch    = 100
+	// Декодирование разворачивает до 50 Мпикс в память; prefetch ограничивает
+	// только доставку, поэтому пиковую память задаёт этот предел.
+	defaultWorkerDecodeConcurrency = 2
 )
 
 // maxJPEGQuality — верхняя граница качества JPEG в пакете image/jpeg.
@@ -223,6 +227,8 @@ type Worker struct {
 	StuckAfter time.Duration
 	// ReconcileBatch — сколько зависших записей разбирается за один проход.
 	ReconcileBatch int
+	// DecodeConcurrency — сколько изображений обрабатывается одновременно.
+	DecodeConcurrency int
 }
 
 // getenv — источник значений переменных окружения.
@@ -356,6 +362,7 @@ func load(env getenv) (*Config, error) {
 			ReconcileInterval: r.duration(envWorkerReconcileInterval, defaultWorkerReconcileInterval),
 			StuckAfter:        r.duration(envWorkerStuckAfter, defaultWorkerStuckAfter),
 			ReconcileBatch:    r.integer(envWorkerReconcileBatch, defaultWorkerReconcileBatch),
+			DecodeConcurrency: r.integer(envWorkerDecodeConcurrency, defaultWorkerDecodeConcurrency),
 		},
 	}
 
@@ -443,6 +450,7 @@ func (c Worker) validate() error {
 		positiveDuration(envWorkerReconcileInterval, c.ReconcileInterval),
 		positiveDuration(envWorkerStuckAfter, c.StuckAfter),
 		positive(envWorkerReconcileBatch, int64(c.ReconcileBatch)),
+		positive(envWorkerDecodeConcurrency, int64(c.DecodeConcurrency)),
 	)
 }
 
