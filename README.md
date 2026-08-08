@@ -68,6 +68,17 @@ curl -F file=@photo.jpg -H 'X-User-ID: alice' http://localhost:8080/api/v1/avata
 curl -o avatar.jpg 'http://localhost:8080/api/v1/users/alice/avatar?size=100x100'
 ```
 
+## Веб-интерфейс
+
+| Маршрут | Назначение |
+|---|---|
+| `GET /web/upload` | форма загрузки с превью выбранного файла |
+| `POST /web/upload` | обработка загрузки, `303` на галерею |
+| `GET /web/gallery/{user_id}` | галерея пользователя |
+
+Страницы собраны на `html/template`, шаблоны и статика встроены в бинарник,
+JS-сборки нет. Владелец задаётся полем формы.
+
 ## Разработка
 
 ```sh
