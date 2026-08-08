@@ -171,11 +171,22 @@ func TestGetMissingObject(t *testing.T) {
 func TestDeleteMissingObject(t *testing.T) {
 	t.Parallel()
 
-	rec := &recorder{bucketExists: true, objects: notFound}
+	const response = `<?xml version="1.0" encoding="UTF-8"?>
+<DeleteResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+  <Error><Key>originals/gone</Key><Code>NoSuchKey</Code><Message>Not Found</Message></Error>
+</DeleteResult>`
+
+	rec := &recorder{
+		bucketExists: true,
+		objects: func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/xml")
+			_, _ = io.WriteString(w, response)
+		},
+	}
 	storage := newStorage(t, rec, shortTimeout)
 
 	// Удаление идемпотентно: повторная доставка события удаления штатна.
-	require.NoError(t, storage.Delete(t.Context(), testKey))
+	require.NoError(t, storage.DeleteMany(t.Context(), []string{"originals/gone"}))
 }
 
 func TestPutContentType(t *testing.T) {
@@ -220,21 +231,22 @@ func TestRetryOnTemporaryFailure(t *testing.T) {
 
 	rec := &recorder{
 		bucketExists: true,
-		objects: func(w http.ResponseWriter, _ *http.Request) {
+		objects: func(w http.ResponseWriter, r *http.Request) {
 			if attempts.Add(1) == 1 {
 				w.WriteHeader(http.StatusServiceUnavailable)
 
 				return
 			}
 
-			w.WriteHeader(http.StatusNoContent)
+			ok(w, r)
 		},
 	}
 	// Задержка перед повтором — сотни миллисекунд, поэтому предел здесь
 	// заметно больше, чем в остальных тестах.
 	storage := newStorage(t, rec, 5*time.Second)
 
-	require.NoError(t, storage.Delete(t.Context(), testKey))
+	body := "not really an image"
+	require.NoError(t, storage.Put(t.Context(), testKey, strings.NewReader(body), int64(len(body)), "image/png"))
 	assert.Equal(t, int64(2), attempts.Load(), "временная ошибка должна была уйти на повтор")
 }
 
@@ -288,12 +300,6 @@ func TestHangingStorageOwnTimeout(t *testing.T) {
 			name: "put",
 			call: func(ctx context.Context, storage *s3.Storage) error {
 				return storage.Put(ctx, testKey, strings.NewReader("x"), 1, "image/png")
-			},
-		},
-		{
-			name: "delete",
-			call: func(ctx context.Context, storage *s3.Storage) error {
-				return storage.Delete(ctx, testKey)
 			},
 		},
 		{

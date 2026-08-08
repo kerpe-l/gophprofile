@@ -38,15 +38,11 @@ func (s *Storage) Put(ctx context.Context, key string, r io.Reader, size int64, 
 	return nil
 }
 
-// Get открывает объект на чтение. Тело возвращённого объекта обязано быть
-// закрыто вызывающим, в том числе если чтение прервалось на середине.
+// Get открывает объект на чтение; отсутствие объекта — domain.ErrNotFound.
+// Тело обязано быть закрыто вызывающим, в том числе при обрыве чтения.
 //
-// Отсутствие объекта — domain.ErrNotFound.
-//
-// Своего предела времени Get не ставит: тело читается уже после возврата
-// из метода, и дедлайн, снятый по выходу, оборвал бы выдачу на середине.
-// Ограничить всю выдачу — задача вызывающего: у него есть дедлайн запроса
-// или бюджет обработки сообщения.
+// Своего предела времени Get не ставит: тело читается после возврата
+// из метода. Ограничить выдачу — задача вызывающего.
 func (s *Storage) Get(ctx context.Context, key string) (domain.StoredObject, error) {
 	obj, err := s.client.GetObject(ctx, s.bucket, key, minio.GetObjectOptions{})
 	if err != nil {
@@ -73,22 +69,9 @@ func (s *Storage) Get(ctx context.Context, key string) (domain.StoredObject, err
 	}, nil
 }
 
-// Delete удаляет объект по ключу. Удаление идемпотентно: отсутствие объекта
-// ошибкой не считается — повторная доставка события удаления штатна.
-func (s *Storage) Delete(ctx context.Context, key string) error {
-	ctx, cancel := s.withDeadline(ctx)
-	defer cancel()
-
-	err := s.client.RemoveObject(ctx, s.bucket, key, minio.RemoveObjectOptions{})
-	if err != nil && !isNotFound(err) {
-		return mapError("delete object", key, err)
-	}
-
-	return nil
-}
-
-// DeleteMany удаляет объекты одним пакетным запросом. Как и Delete,
-// идемпотентно.
+// DeleteMany удаляет объекты одним пакетным запросом. Удаление идемпотентно:
+// отсутствие объекта ошибкой не считается — повторная доставка события
+// удаления штатна.
 //
 // Отказ на части ключей не выглядит успехом: ошибки собираются по всем
 // объектам и возвращаются вместе.

@@ -142,14 +142,15 @@ func (s *StorageSuite) TestDeleteIsIdempotent() {
 	s.put(originalKey, pngMediaType, []byte("bytes"))
 
 	ctx := s.T().Context()
+	keys := []string{originalKey}
 
-	s.Require().NoError(s.storage.Delete(ctx, originalKey))
+	s.Require().NoError(s.storage.DeleteMany(ctx, keys))
 
 	_, err := s.storage.Get(ctx, originalKey)
 	s.Require().ErrorIs(err, domain.ErrNotFound)
 
 	// Повторная доставка события удаления не должна выглядеть отказом.
-	s.Require().NoError(s.storage.Delete(ctx, originalKey))
+	s.Require().NoError(s.storage.DeleteMany(ctx, keys))
 }
 
 func (s *StorageSuite) TestDeleteManyWithMissingKeys() {
