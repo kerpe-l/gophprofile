@@ -195,26 +195,25 @@ type Worker struct {
 	DecodeConcurrency int
 }
 
-// getenv — источник значений переменных окружения.
-// Отдельный тип нужен, чтобы тесты не правили окружение процесса.
-type getenv func(key string) string
+// getenv — источник переменных окружения, второе значение — объявлена ли переменная.
+type getenv func(key string) (value string, ok bool)
 
 // LoadServer загружает конфигурацию API-сервера и проверяет все секции.
 func LoadServer() (*Config, error) {
-	return loadServer(os.Getenv)
+	return loadServer(os.LookupEnv)
 }
 
 // LoadWorker загружает конфигурацию обработчика событий.
 // Секция HTTP не проверяется: воркер не слушает HTTP.
 func LoadWorker() (*Config, error) {
-	return loadWorker(os.Getenv)
+	return loadWorker(os.LookupEnv)
 }
 
 // LoadMigrator загружает конфигурацию мигратора.
 // Проверяются только App и DB: мигратор применяет схему и выходит, ни
 // хранилища, ни брокера, ни HTTP-порта ему не нужно.
 func LoadMigrator() (*Config, error) {
-	return loadMigrator(os.Getenv)
+	return loadMigrator(os.LookupEnv)
 }
 
 func loadServer(env getenv) (*Config, error) {
@@ -443,22 +442,27 @@ func positiveDuration(key string, value time.Duration) error {
 }
 
 // reader читает переменные окружения, накапливая ошибки разбора.
+// Значение по умолчанию подставляется только необъявленной переменной:
+// объявленная пустой — ошибка конфигурации, а не «не задано».
 type reader struct {
 	env  getenv
 	errs []error
 }
 
 func (r *reader) str(key, def string) string {
-	if v := r.env(key); v != "" {
-		return v
+	v, ok := r.env(key)
+	if !ok {
+		return def
 	}
 
-	return def
+	// Пустую строку возвращаем как есть: обязательность проверяет валидация
+	// секции, необязательных строковых полей в конфиге нет.
+	return v
 }
 
 func (r *reader) integer(key string, def int) int {
-	v := r.env(key)
-	if v == "" {
+	v, ok := r.env(key)
+	if !ok {
 		return def
 	}
 
@@ -473,8 +477,8 @@ func (r *reader) integer(key string, def int) int {
 }
 
 func (r *reader) integer64(key string, def int64) int64 {
-	v := r.env(key)
-	if v == "" {
+	v, ok := r.env(key)
+	if !ok {
 		return def
 	}
 
@@ -489,8 +493,8 @@ func (r *reader) integer64(key string, def int64) int64 {
 }
 
 func (r *reader) boolean(key string, def bool) bool {
-	v := r.env(key)
-	if v == "" {
+	v, ok := r.env(key)
+	if !ok {
 		return def
 	}
 
@@ -505,8 +509,8 @@ func (r *reader) boolean(key string, def bool) bool {
 }
 
 func (r *reader) duration(key string, def time.Duration) time.Duration {
-	v := r.env(key)
-	if v == "" {
+	v, ok := r.env(key)
+	if !ok {
 		return def
 	}
 
@@ -521,8 +525,8 @@ func (r *reader) duration(key string, def time.Duration) time.Duration {
 }
 
 func (r *reader) level(key string, def slog.Level) slog.Level {
-	v := r.env(key)
-	if v == "" {
+	v, ok := r.env(key)
+	if !ok {
 		return def
 	}
 
@@ -537,8 +541,8 @@ func (r *reader) level(key string, def slog.Level) slog.Level {
 }
 
 func (r *reader) format(key string, def logger.Format) logger.Format {
-	v := r.env(key)
-	if v == "" {
+	v, ok := r.env(key)
+	if !ok {
 		return def
 	}
 

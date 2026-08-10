@@ -14,7 +14,11 @@ import (
 // mapEnv подменяет окружение процесса картой, чтобы тесты не правили
 // глобальное состояние и могли идти параллельно.
 func mapEnv(m map[string]string) getenv {
-	return func(key string) string { return m[key] }
+	return func(key string) (string, bool) {
+		v, ok := m[key]
+
+		return v, ok
+	}
 }
 
 // requiredEnv — минимальный набор переменных, без которых старт невозможен.
@@ -111,6 +115,13 @@ func TestLoadServerInvalidValues(t *testing.T) {
 		{name: "int64", key: envImageMaxPixels, value: "50m", wantErr: envImageMaxPixels},
 		{name: "bool", key: envS3UseSSL, value: "maybe", wantErr: envS3UseSSL},
 		{name: "jpeg quality above range", key: envImageJPEGQuality, value: "101", wantErr: envImageJPEGQuality + " must be at most 100"},
+		// Объявленная пустой переменная — дефолт не подставляется.
+		{name: "empty string", key: envS3Bucket, value: "", wantErr: envS3Bucket + " is required"},
+		{name: "empty duration", key: envDBQueryTimeout, value: "", wantErr: envDBQueryTimeout},
+		{name: "empty integer", key: envDBMaxConns, value: "", wantErr: envDBMaxConns},
+		{name: "empty bool", key: envS3UseSSL, value: "", wantErr: envS3UseSSL},
+		{name: "empty log level", key: envLogLevel, value: "", wantErr: envLogLevel},
+		{name: "empty log format", key: envLogFormat, value: "", wantErr: envLogFormat},
 	}
 
 	for _, tc := range tests {

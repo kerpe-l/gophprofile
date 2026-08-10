@@ -1,6 +1,6 @@
 module github.com/kerpe-l/gophprofile
 
-go 1.25.12
+go 1.26.5
 
 require (
 	github.com/disintegration/imaging v1.6.2

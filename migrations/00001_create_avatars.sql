@@ -9,12 +9,19 @@ CREATE TABLE avatars (
     height INT,
     s3_key VARCHAR(500) NOT NULL,
     thumbnail_s3_keys JSONB,
-    upload_status VARCHAR(50) DEFAULT 'uploading',      -- uploading | uploaded | failed
-    processing_status VARCHAR(50) DEFAULT 'pending',    -- pending | processing | completed | failed
+    upload_status VARCHAR(50) NOT NULL DEFAULT 'uploading',
+    processing_status VARCHAR(50) NOT NULL DEFAULT 'pending',
     retry_count INT NOT NULL DEFAULT 0,
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW(),
-    deleted_at TIMESTAMPTZ
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at TIMESTAMPTZ,
+
+    -- Перечни статусов заданы в internal/domain; здесь они продублированы,
+    -- чтобы недопустимое значение отвергала сама база.
+    CONSTRAINT avatars_upload_status_check
+        CHECK (upload_status IN ('uploading', 'uploaded', 'failed')),
+    CONSTRAINT avatars_processing_status_check
+        CHECK (processing_status IN ('pending', 'processing', 'completed', 'failed'))
 );
 
 -- Частичный индекс: живые аватары пользователя выбираются постоянно,

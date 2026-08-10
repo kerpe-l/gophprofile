@@ -84,7 +84,8 @@ type errorResponse struct {
 func (a *api) respond(w http.ResponseWriter, r *http.Request, err error) {
 	status, body := a.mapError(err)
 
-	level := slog.LevelWarn
+	// 4xx — Debug.
+	level := slog.LevelDebug
 	if status >= http.StatusInternalServerError {
 		level = slog.LevelError
 	}
