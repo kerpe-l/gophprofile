@@ -1,0 +1,32 @@
+# syntax=docker/dockerfile:1
+
+FROM golang:1.26.5-alpine AS build
+
+ARG VERSION=dev
+ARG BUILD_DATE=unknown
+ARG MODULE=github.com/kerpe-l/gophprofile
+
+WORKDIR /src
+
+COPY go.mod go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download
+
+COPY . .
+
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=linux go build \
+    -trimpath \
+    -ldflags "-s -w \
+    -X ${MODULE}/internal/buildinfo.version=${VERSION} \
+    -X ${MODULE}/internal/buildinfo.buildDate=${BUILD_DATE}" \
+    -o /out/migrator ./cmd/migrator
+
+FROM gcr.io/distroless/static-debian12:nonroot AS runtime
+
+COPY --from=build /out/migrator /migrator
+
+USER nonroot:nonroot
+
+ENTRYPOINT ["/migrator"]

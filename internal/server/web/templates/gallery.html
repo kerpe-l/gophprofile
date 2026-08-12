@@ -1,0 +1,30 @@
+{{define "title"}}Gallery of {{.UserID}}{{end}}
+
+{{define "content"}}
+<h1>Avatars of {{.UserID}}</h1>
+
+<p><a href="{{uploadURL .UserID}}">Upload another one</a></p>
+
+{{if .Avatars}}
+<ul class="gallery">
+    {{range .Avatars}}
+    <li class="card avatar{{if .IsCurrent}} current{{end}}">
+        <a href="{{.OriginalURL}}">
+            <img class="thumb" src="{{.ThumbnailURL}}" alt="{{.FileName}}"
+                 width="100" height="100" loading="lazy">
+        </a>
+        <p class="name">{{.FileName}}</p>
+        <dl>
+            <dt>Size</dt><dd>{{.Size}}</dd>
+            <dt>Dimensions</dt><dd>{{.Dimensions}}</dd>
+            <dt>Uploaded</dt><dd>{{.CreatedAt}}</dd>
+            <dt>State</dt><dd>{{.Status}}</dd>
+        </dl>
+        {{if .IsCurrent}}<p class="badge">current avatar</p>{{end}}
+    </li>
+    {{end}}
+</ul>
+{{else}}
+<p class="empty">No avatars yet — the default one is served instead.</p>
+{{end}}
+{{end}}

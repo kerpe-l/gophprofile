@@ -1,0 +1,210 @@
+package http
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"strings"
+
+	"github.com/kerpe-l/gophprofile/internal/domain"
+)
+
+// Имена заголовков и параметров запроса.
+const (
+	headerRequestID     = "X-Request-ID"
+	headerUserID        = "X-User-ID"
+	headerAvatarDefault = "X-Avatar-Default"
+	headerContentType   = "Content-Type"
+	headerContentLength = "Content-Length"
+	headerCacheControl  = "Cache-Control"
+	headerETag          = "ETag"
+	headerIfNoneMatch   = "If-None-Match"
+
+	paramAvatarID = "avatar_id"
+	paramUserID   = "user_id"
+	paramSize     = "size"
+)
+
+// Пределы длины значений, попадающих в колонки базы: длиннее — 400, а не 500
+// на вставке.
+const (
+	maxUserIDLen   = 255
+	maxFileNameLen = 255
+)
+
+// multipartOverheadBytes — запас на boundary и заголовки полей формы, чтобы
+// файл ровно предельного размера проходил ограничитель тела.
+const multipartOverheadBytes = 64 << 10
+
+// contentTypeJSON — тип тела ответов API.
+const contentTypeJSON = "application/json; charset=utf-8"
+
+// Тексты ответов об ошибках. Наружу уходит общая формулировка: текст
+// внутренней ошибки может содержать пути, имена таблиц и адреса.
+const (
+	messageInternal      = "Internal error"
+	messageNotFound      = "Avatar not found"
+	messageForbidden     = "Forbidden"
+	messageInvalidFormat = "Invalid file format"
+	messageTooLarge      = "File too large"
+	messageBadRequest    = "Bad request"
+	messageConflict      = "Avatar state changed"
+	messageTimeout       = "Request timeout"
+)
+
+// Ошибки транспорта: причины, по которым запрос не доходит до сервиса.
+var (
+	// errMissingUserID — не задан обязательный для записи заголовок владельца.
+	errMissingUserID = errors.New("missing user id header")
+	// errInvalidAvatarID — идентификатор аватара в пути не является UUID.
+	errInvalidAvatarID = errors.New("invalid avatar id")
+	// errMissingFile — в форме нет файла ни под одним из принимаемых имён.
+	errMissingFile = errors.New("missing file field")
+	// errMalformedBody — тело не разбирается как multipart/form-data.
+	errMalformedBody = errors.New("malformed multipart body")
+	// errUserIDTooLong — идентификатор пользователя длиннее своей колонки.
+	errUserIDTooLong = errors.New("user id is too long")
+	// errFileNameTooLong — имя файла длиннее своей колонки.
+	errFileNameTooLong = errors.New("file name is too long")
+)
+
+type errorResponse struct {
+	Error   string `json:"error"`
+	Details string `json:"details,omitempty"`
+	// MaxSize заполняется только при отказе по размеру, отсюда omitzero:
+	// ноль здесь означал бы запрет загрузки.
+	MaxSize int64 `json:"max_size,omitzero"`
+}
+
+// respond переводит ошибку в ответ клиенту. Неразобранное отдаётся как
+// внутренняя ошибка, а в лог уходит целиком.
+func (a *api) respond(w http.ResponseWriter, r *http.Request, err error) {
+	status, body := a.mapError(err)
+
+	// 4xx — Debug.
+	level := slog.LevelDebug
+	if status >= http.StatusInternalServerError {
+		level = slog.LevelError
+	}
+
+	a.log.Log(r.Context(), level, "request failed",
+		slog.Any("error", err),
+		slog.String("method", r.Method),
+		slog.String("path", r.URL.Path),
+		slog.Int("status", status),
+	)
+
+	writeJSON(r.Context(), w, a.log, status, body)
+}
+
+// mapError переводит ошибку в HTTP-статус и безопасное для клиента тело.
+func (a *api) mapError(err error) (int, errorResponse) {
+	switch {
+	case errors.Is(err, domain.ErrNotFound):
+		return http.StatusNotFound, errorResponse{Error: messageNotFound}
+
+	case errors.Is(err, domain.ErrForbidden):
+		return http.StatusForbidden, errorResponse{
+			Error:   messageForbidden,
+			Details: "You can only delete your own avatars",
+		}
+
+	case errors.Is(err, domain.ErrTooLarge):
+		return http.StatusRequestEntityTooLarge, errorResponse{
+			Error:   messageTooLarge,
+			MaxSize: a.maxUpload,
+		}
+
+	case errors.Is(err, domain.ErrUnsupportedFormat):
+		return http.StatusBadRequest, errorResponse{
+			Error:   messageInvalidFormat,
+			Details: "Supported formats: jpeg, png, webp",
+		}
+
+	case errors.Is(err, domain.ErrImageTooBig):
+		return http.StatusBadRequest, errorResponse{
+			Error:   messageInvalidFormat,
+			Details: "Image has too many pixels",
+		}
+
+	case errors.Is(err, domain.ErrUnsupportedSize):
+		return http.StatusBadRequest, errorResponse{
+			Error:   messageBadRequest,
+			Details: "Supported sizes: " + supportedSizes(),
+		}
+
+	case errors.Is(err, errMissingUserID):
+		return http.StatusBadRequest, errorResponse{
+			Error:   messageBadRequest,
+			Details: headerUserID + " header is required",
+		}
+
+	case errors.Is(err, errInvalidAvatarID):
+		return http.StatusBadRequest, errorResponse{
+			Error:   messageBadRequest,
+			Details: "Avatar id must be a UUID",
+		}
+
+	case errors.Is(err, errMissingFile):
+		return http.StatusBadRequest, errorResponse{
+			Error:   messageBadRequest,
+			Details: "Attach the image as the file field",
+		}
+
+	case errors.Is(err, errMalformedBody):
+		return http.StatusBadRequest, errorResponse{
+			Error:   messageBadRequest,
+			Details: "Body must be multipart/form-data",
+		}
+
+	case errors.Is(err, errUserIDTooLong):
+		return http.StatusBadRequest, errorResponse{
+			Error:   messageBadRequest,
+			Details: fmt.Sprintf("%s must be at most %d characters", headerUserID, maxUserIDLen),
+		}
+
+	case errors.Is(err, errFileNameTooLong):
+		return http.StatusBadRequest, errorResponse{
+			Error:   messageBadRequest,
+			Details: fmt.Sprintf("File name must be at most %d characters", maxFileNameLen),
+		}
+
+	case errors.Is(err, domain.ErrInvalidTransition):
+		// Запись сменила состояние между чтением и записью: повтор запроса
+		// имеет смысл, а сервер здесь ни при чём.
+		return http.StatusConflict, errorResponse{Error: messageConflict}
+
+	case errors.Is(err, context.DeadlineExceeded):
+		return http.StatusGatewayTimeout, errorResponse{Error: messageTimeout}
+
+	default:
+		return http.StatusInternalServerError, errorResponse{Error: messageInternal}
+	}
+}
+
+// supportedSizes перечисляет значения параметра size, собирая их из доменных
+// размеров.
+func supportedSizes() string {
+	sizes := domain.ThumbnailSizes()
+	values := make([]string, 0, len(sizes)+1)
+
+	for _, size := range sizes {
+		values = append(values, string(size))
+	}
+
+	return strings.Join(append(values, domain.SizeOriginal), ", ")
+}
+
+// writeJSON отдаёт тело ответа в JSON. Ошибка кодирования только логируется:
+// заголовки уже отправлены.
+func writeJSON(ctx context.Context, w http.ResponseWriter, log *slog.Logger, status int, body any) {
+	w.Header().Set(headerContentType, contentTypeJSON)
+	w.WriteHeader(status)
+
+	if err := json.NewEncoder(w).Encode(body); err != nil {
+		log.ErrorContext(ctx, "write response body", slog.Any("error", err))
+	}
+}

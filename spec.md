@@ -1,30 +1,33 @@
 # GophProfile — спецификация
 
-
 ## 1. Назначение
 
 Микросервис хранения и раздачи аватарок. Пользователь загружает изображение; сервис сохраняет оригинал, асинхронно создаёт миниатюры и отдаёт аватар по запросу. Если аватара нет — отдаётся стандартная заглушка.
 
 ## 2. Технологические решения
 
-| Решение | Выбор | Обоснование |
-|---|---|---|
-| Язык | Go 1.25+ | — |
-| HTTP-роутер | Chi | группы `/api/v1` и `/web` с разными наборами middleware; хендлеры остаются `http.HandlerFunc` и тестируются через `httptest` |
-| БД метаданных | PostgreSQL 16 | — |
-| Драйвер БД | `jackc/pgx/v5` | — |
-| Файловое хранилище | MinIO (S3 API), клиент `minio-go/v7` | локально в Docker, совместимо с AWS S3 |
-| Брокер | RabbitMQ, exchange `avatars.exchange` типа `topic`, клиент `rabbitmq/amqp091-go` | — |
-| Обработка изображений | `disintegration/imaging` | даёт `imaging.Fill` — центрированный кроп в квадрат |
-| Декодирование WebP | `golang.org/x/image/webp` | — |
-| Миграции | `pressly/goose/v3` + `embed.FS` | — |
-| Тесты | `stretchr/testify` (+ `suite` для интеграционных), `testcontainers-go` | — |
-| Деплой | Docker Compose (спринт 1), Kubernetes (позже) | |
+| Область | Выбор |
+|---|---|
+| Язык | Go 1.26+ |
+| HTTP-роутер | Chi |
+| БД метаданных | PostgreSQL 16, драйвер `jackc/pgx/v5` |
+| Файловое хранилище | MinIO (S3 API), клиент `minio-go/v7` |
+| Брокер | RabbitMQ, клиент `rabbitmq/amqp091-go` |
+| Обработка изображений | `disintegration/imaging`, декодер WebP `golang.org/x/image/webp` |
+| Миграции | `pressly/goose/v3` + `embed.FS` |
+| Тесты | `stretchr/testify` (+ `suite` для интеграционных), `testcontainers-go` |
+| Деплой | Docker Compose |
+
+Три выбора требуют пояснения:
+
+- **Chi** — группы `/api/v1` и `/web` с разными наборами middleware; хендлеры при этом остаются `http.HandlerFunc` и тестируются через `httptest`.
+- **`imaging`** — `imaging.Fill`: центрированный кроп в квадрат с ресайзом.
+- **MinIO** — S3-совместимое хранилище, которое поднимается локально в Docker.
 
 ## 3. Компоненты
 
 - **server** — REST API + веб-интерфейс. Принимает загрузку, пишет метаданные в PG, кладёт оригинал в S3, публикует событие.
-- **worker** — подписан на события. Создаёт миниатюры (100x100, 300x300), удаляет файлы из S3 при удалении аватара, добирает зависшие загрузки (§6.3).
+- **worker** — подписан на события. Создаёт миниатюры (100x100, 300x300), удаляет файлы из S3 при удалении аватара, добирает зависшие загрузки ([§6.3](#63-reconciler)).
 - **migrator** — одноразовый контейнер, применяет миграции до старта server и worker. DDL не выполняют ни server, ни worker — иначе они гоняются друг с другом за блокировки при параллельном старте.
 - **PostgreSQL** — метаданные аватарок.
 - **MinIO** — оригиналы и миниатюры.
@@ -56,10 +59,9 @@ internal/
   worker/
     handler/                    # обработчики avatar.uploaded / avatar.deleted
     reconciler/                 # добор зависших загрузок (§6.3)
-migrations/                     # SQL-миграции goose
+migrations/                     # SQL-миграции
 build/                          # Dockerfile.server, Dockerfile.worker, Dockerfile.migrator
 docker-compose.yml
-spec.md                         # этот документ
 ```
 
 ## 4. REST API
@@ -85,8 +87,7 @@ Body:     multipart/form-data, поле file (required, max 10MB)
 413 → { "error": "File too large", "max_size": 10485760 }
 ```
 
-Поле формы называется `file`. Дополнительно принимается `image`. 
-`file` имеет приоритет, если присутствуют оба.
+Файл принимается под именем `file` или `image`; при обоих приоритет у `file`.
 
 Валидация, по порядку:
 
@@ -115,11 +116,13 @@ Query (опционально):
 
 Раздача — стримингом через `io.Copy` из S3, без буферизации тела в память.
 
-`ETag` берётся из S3 (MinIO возвращает md5 объекта); поддерживается `If-None-Match` → 304.
+`ETag` берётся из S3 — MinIO возвращает md5 объекта.
 
-**Миниатюра ещё не готова.** Если запрошен `size=100x100|300x300`, а `processing_status` ещё не `completed`, отдаётся оригинал с `Cache-Control: max-age=60`. Для аватарки временно неточный размер лучше, чем 404, а короткий TTL гарантирует, что клиент скоро перезапросит уже готовую миниатюру.
+**Миниатюры ещё нет.** Если запрошен `size=100x100|300x300`, а миниатюры нет, отдаётся оригинал: временно неточный размер лучше, чем 404. Пока обработка не завершилась — с `Cache-Control: max-age=60`, чтобы клиент скоро перезапросил готовую миниатюру; при терминальном `processing_status = failed` — с обычными сутками, миниатюра уже не появится.
 
-**Заглушка.** `GET /users/{user_id}/avatar` отдаёт актуальный аватар пользователя (§4.4); если аватара нет — **200 с заглушкой**, это прямое назначение сервиса из §1. Дополнительно:
+**Актуальный аватар** пользователя — последний по `created_at` среди живых (`deleted_at IS NULL`) записей с `upload_status = 'uploaded'`: аватаров у пользователя может быть несколько, [§4.3](#43-метаданные-и-список) отдаёт список. Фильтр по статусу загрузки обязателен — без него оборвавшаяся загрузка маскирует рабочий аватар.
+
+**Заглушка.** `GET /users/{user_id}/avatar` отдаёт актуальный аватар пользователя; если аватара нет — **200 с заглушкой**, это прямое назначение сервиса из [§1](#1-назначение). Дополнительно:
 
 - `X-Avatar-Default: true` — чтобы клиент мог отличить заглушку от настоящего аватара;
 - `Cache-Control: max-age=300` вместо суток — иначе заглушка залипнет в кешах и первая загрузка аватара не подхватится;
@@ -146,7 +149,7 @@ GET /api/v1/users/{user_id}/avatars
 
 `url` в `thumbnails[]` — относительный путь вида `/api/v1/avatars/{id}?size=100x100`. Абсолютные URL не строим: сервис не знает своего внешнего адреса за прокси, а угадывание по `Host` ломается при смене домена.
 
-`GET /users/{user_id}/avatars` возвращает только живые (`deleted_at IS NULL`) аватары, отсортированные по `created_at DESC`.
+`GET /users/{user_id}/avatars` возвращает живые (`deleted_at IS NULL`) аватары с загруженным оригиналом (`upload_status = 'uploaded'`), отсортированные по `created_at DESC`.
 
 ### 4.4 Удаление
 
@@ -160,9 +163,7 @@ Headers: X-User-ID: string (required)
 404 → { "error": "Avatar not found" }
 ```
 
-**Актуальный аватар** пользователя — последний по `created_at` среди записей с `deleted_at IS NULL`. Модель допускает несколько аватаров у пользователя (§4.3 отдаёт список), поэтому определение нужно явно.
-
-`DELETE /users/{user_id}/avatar` удаляет **только актуальный** аватар — симметрично `GET /users/{user_id}/avatar`. Массового удаления всех аватаров пользователя в API нет.
+`DELETE /users/{user_id}/avatar` удаляет **только актуальный** аватар ([§4.2](#42-получение)) — симметрично `GET /users/{user_id}/avatar`. Массового удаления всех аватаров пользователя в API нет.
 
 Удаление идемпотентно: повторный `DELETE` уже удалённого аватара → 404.
 
@@ -201,23 +202,36 @@ CREATE TABLE avatars (
     height INT,
     s3_key VARCHAR(500) NOT NULL,
     thumbnail_s3_keys JSONB,
-    upload_status VARCHAR(50) DEFAULT 'uploading',      -- uploading | uploaded | failed
-    processing_status VARCHAR(50) DEFAULT 'pending',    -- pending | processing | completed | failed
+    upload_status VARCHAR(50) NOT NULL DEFAULT 'uploading',
+    processing_status VARCHAR(50) NOT NULL DEFAULT 'pending',
     retry_count INT NOT NULL DEFAULT 0,
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW(),
-    deleted_at TIMESTAMPTZ
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at TIMESTAMPTZ,
+
+    CONSTRAINT avatars_upload_status_check
+        CHECK (upload_status IN ('uploading', 'uploaded', 'failed')),
+    CONSTRAINT avatars_processing_status_check
+        CHECK (processing_status IN ('pending', 'processing', 'completed', 'failed'))
 );
 
 CREATE INDEX idx_avatars_user_id ON avatars(user_id) WHERE deleted_at IS NULL;
-CREATE INDEX idx_avatars_status  ON avatars(upload_status, processing_status);
+CREATE INDEX idx_avatars_status  ON avatars(upload_status, processing_status, updated_at)
+    WHERE deleted_at IS NULL;
 ```
 
-`width`/`height` добавлены к исходной схеме — §4.3 требует `dimensions` в метаданных, а читать их из S3 на каждый запрос метаданных незачем: они известны на этапе загрузки из `image.DecodeConfig`.
+`width`/`height` добавлены к исходной схеме: [§4.3](#43-метаданные-и-список) требует `dimensions` в метаданных, а размеры известны уже на этапе загрузки из `image.DecodeConfig` — читать их из S3 на каждый запрос не нужно.
 
-`idx_avatars_status` не используется ни одним запросом API — он существует ради reconciler'а (§6.3).
+`idx_avatars_status` не используется ни одним запросом API — он существует ради reconciler'а ([§6.3](#63-reconciler)). `updated_at` входит в него третьей колонкой, потому что запрос reconciler'а по нему и отбирает (старше отсечки), и упорядочивает; без этой колонки отобранное пришлось бы сортировать отдельно. Индекс частичный: мягко удалённые записи в добор не попадают.
 
 `thumbnail_s3_keys` — объект `{"100x100": "thumbnails/<id>/100x100", "300x300": "..."}`.
+
+Допустимые переходы статусов:
+
+- `upload_status`: `uploading → uploaded`, `uploading → failed`. `uploaded` и `failed` терминальны: повторная загрузка порождает новую запись, а не переоткрывает старую.
+- `processing_status`: `pending → processing`, `processing → processing`, `processing → completed`, `pending → failed`, `processing → failed`. `completed` и `failed` терминальны: за повтор отвечает лестница retry-очередей ([§6.2](#62-retry-и-dlq)), а не возврат записи в предыдущий статус. Повторный вход в `processing` нужен для доставки после падения обработчика ([§6.1](#61-идемпотентность)).
+
+Переход проверяет сама база: `UPDATE` отбирает строку не только по `id`, но и по списку разрешённых исходных статусов. Между отдельным чтением статуса и записью его успевает сменить другой процесс.
 
 S3-ключи: `originals/{avatar_id}` и `thumbnails/{avatar_id}/{size}` — генерируются сервисом, имя файла пользователя в ключах не участвует.
 
@@ -248,7 +262,9 @@ type AvatarDeleteEvent struct {
 
 ### 6.1 Идемпотентность
 
-Worker перед обработкой проверяет `processing_status` в БД; событие для уже обработанного или удалённого аватара — ack без работы. Повторная доставка не должна порождать повторную запись в S3.
+Worker перед обработкой проверяет `processing_status` в БД; событие для уже обработанного или удалённого аватара (`completed`, `failed` или запись отсутствует) — ack без работы.
+
+Запись в `processing` обработка начинает заново: это повторная доставка после падения обработчика, и бросать её нельзя. Отсюда следует, что две доставки подряд могут рендерить и писать миниатюры одновременно. Это допускается: ключи детерминированы (`thumbnails/{avatar_id}/{size}`), перезапись даёт то же содержимое. Идемпотентность здесь — про итоговое состояние S3 и БД, а не про то, что работа не повторится.
 
 ### 6.2 Retry и DLQ
 
@@ -256,16 +272,19 @@ Worker перед обработкой проверяет `processing_status` в
 
 ```
 avatars.exchange (topic)
-  └─→ avatars.process         [x-dead-letter-exchange: avatars.retry]
+  └─→ avatars.process         [ключ avatar.*; x-dead-letter-exchange: avatars.retry]
 avatars.retry (direct)
-  ├─→ avatars.retry.5s        [ttl=5s,  dlx → avatars.exchange]
-  ├─→ avatars.retry.30s       [ttl=30s, dlx → avatars.exchange]
-  └─→ avatars.retry.5m        [ttl=5m,  dlx → avatars.exchange]
+  ├─→ avatars.retry.5s        [ключ retry.5s,  ttl=5s,  dlx → avatars.exchange, ключ возврата avatar.retried]
+  ├─→ avatars.retry.30s       [ключ retry.30s, ttl=30s, dlx → avatars.exchange, ключ возврата avatar.retried]
+  └─→ avatars.retry.5m        [ключ retry.5m,  ttl=5m,  dlx → avatars.exchange, ключ возврата avatar.retried]
 avatars.dlq (direct)
   └─→ avatars.dead
 ```
 
-- Число попыток считается по заголовку `x-death` (RabbitMQ ведёт его сам) — уровень задержки выбирается по счётчику: 1→5s, 2→30s, 3+→5m.
+- Ступень задержки выбирает консьюмер: он публикует сообщение в `avatars.retry` с ключом нужной ступени и подтверждает исходное. Отклонением ступень не выбрать — у очереди один dead-letter exchange и один статический ключ, то есть ровно один уровень задержки на всю очередь. Отклонённое сообщение всё равно не теряется: очередь первой ступени привязана и к ключам событий тоже.
+- Уровень задержки выбирается по номеру попытки: 1→5s, 2→30s, 3+→5m.
+- Число попыток консьюмер ведёт сам в заголовке `x-avatar-attempts`. Заголовок `x-death` для этого не годится: RabbitMQ не сохраняет выставленный клиентом и собирает историю заново, поэтому у перекладываемого со ступени на ступень сообщения он всегда показывает одно отклонение. `x-death` остаётся запасным источником — по нему считается попытка у сообщения, которое очередь отклонила сама, минуя консьюмера.
+- Тип события едет в свойстве `type` сообщения, а не в routing key: при возврате с лестницы ключ переписывается на `avatar.retried`, и диспетчеризация обработчиков по ключу после первого же повтора уехала бы не туда.
 - После **5** попыток сообщение уходит в `avatars.dlq`, в БД проставляется `processing_status = 'failed'`.
 - Ошибки делятся на retryable (сеть, временная недоступность S3/PG) и non-retryable (битый файл, неподдерживаемый формат, аватар удалён). Non-retryable → сразу `failed` + ack, без прогона по лестнице: перекодировать битый JPEG через 5 минут не выйдет.
 - `sleep` в консьюмере вместо очередей не годится: блокирует префетч и держит соединение.
@@ -278,7 +297,7 @@ avatars.dlq (direct)
 INSERT (upload_status='uploading') → PUT в S3 → UPDATE 'uploaded' → publish
 ```
 
-Если процесс умер после `PUT`, но до `publish`, аватар навсегда остаётся в `uploaded` + `pending`. Поэтому worker раз в минуту выбирает записи в состоянии `uploaded` + `pending` старше 5 минут (ровно то, подо что заведён `idx_avatars_status`) и переопубликовывает для них событие. Идемпотентность (§6.1) делает повторную публикацию безопасной.
+Если процесс умер после `PUT`, но до `publish`, аватар навсегда остаётся в `uploaded` + `pending`. Поэтому worker раз в минуту выбирает записи в состоянии `uploaded` + `pending` старше 5 минут (ровно то, подо что заведён `idx_avatars_status`) и переопубликовывает для них событие. Идемпотентность ([§6.1](#61-идемпотентность)) делает повторную публикацию безопасной.
 
 Полноценный transactional outbox корректнее, но требует отдельной таблицы и публишера — оставлено как возможное развитие.
 
@@ -290,11 +309,3 @@ INSERT (upload_status='uploading') → PUT в S3 → UPDATE 'uploaded' → publi
 - Docker Compose поднимает всё окружение одной командой.
 - Секреты — только через env.
 - Образы собираются многостадийно, с `CGO_ENABLED=0`, и запускаются не от root.
-
-## 8. Бонус (безопасность, если успеем)
-
-- Rate limiting для API.
-- CORS-настройки.
-- Валидация формата User-ID.
-- Дедупликация по sha256 содержимого.
-- Конвертация формата на лету (`?format=`) — требует cgo, см. §4.2.
