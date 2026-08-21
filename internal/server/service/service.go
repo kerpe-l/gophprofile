@@ -13,11 +13,22 @@ import (
 	"log/slog"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/kerpe-l/gophprofile/internal/broker"
 	"github.com/kerpe-l/gophprofile/internal/domain"
 	"github.com/kerpe-l/gophprofile/internal/imageproc"
 	"github.com/kerpe-l/gophprofile/internal/placeholder"
+)
+
+// tracerName — имя инструментации пакета в трейсах.
+const tracerName = "github.com/kerpe-l/gophprofile/internal/server/service"
+
+// Имена атрибутов спанов.
+const (
+	attrAvatarID = "avatar_id"
+	attrUserID   = "user_id"
 )
 
 // Repository — метаданные аватаров.
@@ -68,6 +79,7 @@ type Service struct {
 	publisher   Publisher
 	validator   Validator
 	placeholder *placeholder.Placeholder
+	tracer      trace.Tracer
 	log         *slog.Logger
 }
 
@@ -86,6 +98,7 @@ func New(
 		publisher:   publisher,
 		validator:   validator,
 		placeholder: ph,
+		tracer:      otel.Tracer(tracerName),
 		log:         log,
 	}
 }

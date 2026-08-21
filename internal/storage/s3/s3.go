@@ -14,9 +14,20 @@ import (
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/kerpe-l/gophprofile/internal/config"
 	"github.com/kerpe-l/gophprofile/internal/domain"
+)
+
+// tracerName — имя инструментации пакета в трейсах.
+const tracerName = "github.com/kerpe-l/gophprofile/internal/storage/s3"
+
+// Имена атрибутов спанов.
+const (
+	attrBucket = "s3.bucket"
+	attrKey    = "s3.key"
 )
 
 // Параметры клиента, не выведенные в конфиг.
@@ -37,6 +48,7 @@ type Storage struct {
 	client    *minio.Client
 	bucket    string
 	transport *http.Transport
+	tracer    trace.Tracer
 	// timeout — предел на одну операцию.
 	timeout time.Duration
 }
@@ -64,6 +76,7 @@ func New(ctx context.Context, cfg config.S3) (*Storage, error) {
 		client:    client,
 		bucket:    cfg.Bucket,
 		transport: transport,
+		tracer:    otel.Tracer(tracerName),
 		timeout:   cfg.Timeout,
 	}
 

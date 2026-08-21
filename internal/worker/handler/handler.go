@@ -12,10 +12,21 @@ import (
 	"log/slog"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/kerpe-l/gophprofile/internal/broker"
 	"github.com/kerpe-l/gophprofile/internal/domain"
+	"github.com/kerpe-l/gophprofile/internal/observability"
 )
+
+// tracerName — имя инструментации пакета в трейсах.
+const tracerName = "github.com/kerpe-l/gophprofile/internal/worker/handler"
+
+// attrAvatarID — имя атрибута спана с идентификатором аватара.
+const attrAvatarID = "avatar_id"
 
 // Repository — метаданные аватаров.
 type Repository interface {
@@ -59,6 +70,7 @@ type Handler struct {
 	// decodeSlots ограничивает одновременные декодирования: prefetch
 	// консьюмера пиковую память не ограничивает.
 	decodeSlots chan struct{}
+	tracer      trace.Tracer
 	log         *slog.Logger
 }
 
@@ -79,6 +91,7 @@ func New(
 		processor:        processor,
 		maxOriginalBytes: maxOriginalBytes,
 		decodeSlots:      make(chan struct{}, decodeConcurrency),
+		tracer:           otel.Tracer(tracerName),
 		log:              log,
 	}
 }
@@ -86,6 +99,21 @@ func New(
 // Handle обрабатывает одно доставленное событие. Тип берётся из свойства
 // сообщения: ключ маршрутизации при возврате с лестницы повторов переписан.
 func (h *Handler) Handle(ctx context.Context, msg broker.Message) error {
+	ctx, span := h.tracer.Start(ctx, "handle "+msg.Type, trace.WithAttributes(
+		semconv.MessagingMessageID(msg.MessageID),
+		attribute.Int("attempt", msg.Attempt),
+	))
+	defer span.End()
+
+	if err := h.dispatch(ctx, msg); err != nil {
+		return observability.SpanError(span, err)
+	}
+
+	return nil
+}
+
+// dispatch выбирает обработчик по типу события.
+func (h *Handler) dispatch(ctx context.Context, msg broker.Message) error {
 	switch msg.Type {
 	case broker.RoutingKeyUploaded:
 		return h.uploaded(ctx, msg)

@@ -8,8 +8,11 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/kerpe-l/gophprofile/internal/domain"
+	"github.com/kerpe-l/gophprofile/internal/observability"
 	"github.com/kerpe-l/gophprofile/internal/placeholder"
 )
 
@@ -43,14 +46,18 @@ type Content struct {
 // оригинал; им же подменяется ещё не созданная миниатюра, но с коротким кешем.
 // Заглушку метод не отдаёт: отсутствие аватара — domain.ErrNotFound.
 func (s *Service) AvatarContent(ctx context.Context, id uuid.UUID, size domain.ThumbnailSize) (Content, error) {
+	ctx, span := s.tracer.Start(ctx, "service.avatar_content",
+		trace.WithAttributes(attribute.String(attrAvatarID, id.String())))
+	defer span.End()
+
 	avatar, err := s.repo.Get(ctx, id)
 	if err != nil {
-		return Content{}, fmt.Errorf("get content of avatar %s: %w", id, err)
+		return Content{}, observability.SpanError(span, fmt.Errorf("get content of avatar %s: %w", id, err))
 	}
 
 	content, err := s.content(ctx, avatar, size)
 	if err != nil {
-		return Content{}, fmt.Errorf("get content of avatar %s: %w", id, err)
+		return Content{}, observability.SpanError(span, fmt.Errorf("get content of avatar %s: %w", id, err))
 	}
 
 	return content, nil
@@ -60,13 +67,18 @@ func (s *Service) AvatarContent(ctx context.Context, id uuid.UUID, size domain.T
 // отсутствии — заглушку. Запись без объекта в хранилище считается
 // отсутствием аватара.
 func (s *Service) UserAvatarContent(ctx context.Context, userID string, size domain.ThumbnailSize) (Content, error) {
+	ctx, span := s.tracer.Start(ctx, "service.user_avatar_content",
+		trace.WithAttributes(attribute.String(attrUserID, userID)))
+	defer span.End()
+
 	avatar, err := s.repo.GetCurrent(ctx, userID)
 	if err != nil {
 		if errors.Is(err, domain.ErrNotFound) {
 			return s.defaultContent(), nil
 		}
 
-		return Content{}, fmt.Errorf("get avatar content of user %s: %w", userID, err)
+		return Content{}, observability.SpanError(span,
+			fmt.Errorf("get avatar content of user %s: %w", userID, err))
 	}
 
 	content, err := s.content(ctx, avatar, size)
@@ -75,7 +87,8 @@ func (s *Service) UserAvatarContent(ctx context.Context, userID string, size dom
 			return s.defaultContent(), nil
 		}
 
-		return Content{}, fmt.Errorf("get avatar content of user %s: %w", userID, err)
+		return Content{}, observability.SpanError(span,
+			fmt.Errorf("get avatar content of user %s: %w", userID, err))
 	}
 
 	return content, nil

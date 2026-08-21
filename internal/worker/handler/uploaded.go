@@ -10,6 +10,8 @@ import (
 	"log/slog"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/kerpe-l/gophprofile/internal/broker"
 	"github.com/kerpe-l/gophprofile/internal/domain"
@@ -31,6 +33,8 @@ func (h *Handler) uploaded(ctx context.Context, msg broker.Message) error {
 	if err != nil {
 		return nonRetryable(fmt.Errorf("parse avatar id %q of message %s: %w", event.AvatarID, msg.MessageID, err))
 	}
+
+	trace.SpanFromContext(ctx).SetAttributes(attribute.String(attrAvatarID, id.String()))
 
 	avatar, ok, err := h.start(ctx, id)
 	if err != nil {

@@ -15,6 +15,7 @@ import (
 	"math"
 	"time"
 
+	"github.com/exaring/otelpgx"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -44,6 +45,10 @@ func New(ctx context.Context, cfg config.DB) (*Repository, error) {
 	}
 
 	poolCfg.MaxConns = int32(cfg.MaxConns)
+
+	// Спан на каждый запрос; имя спана — первое слово SQL, полный текст
+	// уходит в атрибут.
+	poolCfg.ConnConfig.Tracer = otelpgx.NewTracer(otelpgx.WithTrimSQLInSpanName())
 
 	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 	if err != nil {
