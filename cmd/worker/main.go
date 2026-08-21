@@ -10,17 +10,25 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/kerpe-l/gophprofile/internal/broker"
 	"github.com/kerpe-l/gophprofile/internal/buildinfo"
 	"github.com/kerpe-l/gophprofile/internal/config"
 	"github.com/kerpe-l/gophprofile/internal/imageproc"
 	"github.com/kerpe-l/gophprofile/internal/logger"
+	"github.com/kerpe-l/gophprofile/internal/observability"
 	"github.com/kerpe-l/gophprofile/internal/repository/postgres"
 	"github.com/kerpe-l/gophprofile/internal/storage/s3"
 	"github.com/kerpe-l/gophprofile/internal/worker/handler"
 	"github.com/kerpe-l/gophprofile/internal/worker/reconciler"
 )
+
+// serviceName — имя сервиса в трейсах.
+const serviceName = "gophprofile-worker"
+
+// otelShutdownTimeout — предел на финальный сброс очереди спанов.
+const otelShutdownTimeout = 5 * time.Second
 
 func main() {
 	if err := run(); err != nil {
@@ -52,6 +60,21 @@ func run() error {
 	}
 
 	defer app.close(log)
+
+	tracing, err := observability.Setup(ctx, cfg.Otel, serviceName, cfg.App.Env, log)
+	if err != nil {
+		return fmt.Errorf("setup tracing: %w", err)
+	}
+
+	// Спаны сбрасываются после остановки потребления, но до закрытия зависимостей.
+	defer func() {
+		flushCtx, cancel := context.WithTimeout(context.Background(), otelShutdownTimeout)
+		defer cancel()
+
+		if err := tracing.Shutdown(flushCtx); err != nil {
+			log.Error("shutdown tracing", slog.Any("error", err))
+		}
+	}()
 
 	// Добор живёт ровно столько же, сколько потребление: оборвавшееся
 	// соединение с брокером оставило бы тикер публиковать события в никуда.

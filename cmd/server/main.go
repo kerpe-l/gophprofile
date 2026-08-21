@@ -10,12 +10,14 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/kerpe-l/gophprofile/internal/broker"
 	"github.com/kerpe-l/gophprofile/internal/buildinfo"
 	"github.com/kerpe-l/gophprofile/internal/config"
 	"github.com/kerpe-l/gophprofile/internal/imageproc"
 	"github.com/kerpe-l/gophprofile/internal/logger"
+	"github.com/kerpe-l/gophprofile/internal/observability"
 	"github.com/kerpe-l/gophprofile/internal/placeholder"
 	"github.com/kerpe-l/gophprofile/internal/repository/postgres"
 	httpapi "github.com/kerpe-l/gophprofile/internal/server/http"
@@ -23,6 +25,12 @@ import (
 	"github.com/kerpe-l/gophprofile/internal/server/web"
 	"github.com/kerpe-l/gophprofile/internal/storage/s3"
 )
+
+// serviceName — имя сервиса в трейсах.
+const serviceName = "gophprofile-server"
+
+// otelShutdownTimeout — предел на финальный сброс очереди спанов.
+const otelShutdownTimeout = 5 * time.Second
 
 func main() {
 	if err := run(); err != nil {
@@ -55,6 +63,21 @@ func run() error {
 	}
 
 	defer app.close(log)
+
+	tracing, err := observability.Setup(ctx, cfg.Otel, serviceName, cfg.App.Env, log)
+	if err != nil {
+		return fmt.Errorf("setup tracing: %w", err)
+	}
+
+	// Спаны сбрасываются после остановки сервера, но до закрытия зависимостей.
+	defer func() {
+		flushCtx, cancel := context.WithTimeout(context.Background(), otelShutdownTimeout)
+		defer cancel()
+
+		if err := tracing.Shutdown(flushCtx); err != nil {
+			log.Error("shutdown tracing", slog.Any("error", err))
+		}
+	}()
 
 	router, err := app.router(cfg, log)
 	if err != nil {
@@ -175,6 +198,7 @@ func (d *deps) router(cfg *config.Config, log *slog.Logger) (http.Handler, error
 		HTTP:           cfg.HTTP,
 		MaxUploadBytes: cfg.Image.MaxUploadBytes,
 		Web:            pages,
+		Tracing:        cfg.Otel.Endpoint != "",
 		Log:            log,
 	}), nil
 }

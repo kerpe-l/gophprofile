@@ -8,7 +8,11 @@ import (
 	"runtime/debug"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/kerpe-l/gophprofile/internal/logger"
 )
@@ -46,6 +50,24 @@ func validRequestID(id string) bool {
 	}
 
 	return true
+}
+
+// tracing открывает серверный спан на каждый запрос, кроме /health,
+// и после роутинга называет его route pattern'ом chi: сырой путь дал бы
+// отдельное имя спана на каждое значение {avatar_id}.
+func tracing(next http.Handler) http.Handler {
+	renaming := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(w, r)
+
+		if pattern := chi.RouteContext(r.Context()).RoutePattern(); pattern != "" {
+			span := trace.SpanFromContext(r.Context())
+			span.SetName(r.Method + " " + pattern)
+			span.SetAttributes(semconv.HTTPRoute(pattern))
+		}
+	})
+
+	return otelhttp.NewHandler(renaming, "http.server",
+		otelhttp.WithFilter(func(r *http.Request) bool { return r.URL.Path != healthPath }))
 }
 
 // logging пишет одну запись на запрос — с кодом ответа и длительностью.

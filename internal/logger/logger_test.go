@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/kerpe-l/gophprofile/internal/logger"
 )
@@ -47,6 +48,28 @@ func TestNewWithoutRequestID(t *testing.T) {
 
 	rec := decode(t, &buf)
 	assert.NotContains(t, rec, "request_id")
+	assert.NotContains(t, rec, "trace_id")
+}
+
+// Спан в фикстуре несэмплированный: координаты обязаны попасть в лог
+// независимо от решения сэмплера.
+func TestNewAddsTraceContext(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+
+	log := logger.New(&buf, slog.LevelInfo, logger.FormatJSON)
+
+	sc := trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID: trace.TraceID{1},
+		SpanID:  trace.SpanID{2},
+	})
+
+	log.InfoContext(trace.ContextWithSpanContext(t.Context(), sc), "avatar uploaded")
+
+	rec := decode(t, &buf)
+	assert.Equal(t, sc.TraceID().String(), rec["trace_id"])
+	assert.Equal(t, sc.SpanID().String(), rec["span_id"])
 }
 
 // slog.With возвращает логгер с новым хендлером: обёртка обязана пережить

@@ -59,6 +59,10 @@ func TestLoadServerDefaults(t *testing.T) {
 	assert.Equal(t, defaultS3Bucket, cfg.S3.Bucket)
 	assert.False(t, cfg.S3.UseSSL)
 	assert.Equal(t, defaultAMQPPrefetch, cfg.AMQP.Prefetch)
+	// Незаданный endpoint — валидный конфиг с выключенным трейсингом.
+	assert.Empty(t, cfg.Otel.Endpoint)
+	assert.False(t, cfg.Otel.Insecure)
+	assert.InEpsilon(t, defaultOtelSampleRatio, cfg.Otel.SampleRatio, 1e-9)
 	assert.Equal(t, defaultImageMaxUploadBytes, cfg.Image.MaxUploadBytes)
 	assert.Equal(t, defaultImageMaxPixels, cfg.Image.MaxPixels)
 	assert.Equal(t, defaultImageJPEGQuality, cfg.Image.JPEGQuality)
@@ -78,6 +82,9 @@ func TestLoadServerOverrides(t *testing.T) {
 	env[envAMQPPrefetch] = "16"
 	env[envImageMaxUploadBytes] = "1048576"
 	env[envImageJPEGQuality] = "70"
+	env[envOtelEndpoint] = "jaeger:4317"
+	env[envOtelInsecure] = "true"
+	env[envOtelSampleRatio] = "0.25"
 
 	cfg, err := loadServer(mapEnv(env))
 	require.NoError(t, err)
@@ -94,6 +101,9 @@ func TestLoadServerOverrides(t *testing.T) {
 	assert.Equal(t, 16, cfg.AMQP.Prefetch)
 	assert.Equal(t, int64(1<<20), cfg.Image.MaxUploadBytes)
 	assert.Equal(t, 70, cfg.Image.JPEGQuality)
+	assert.Equal(t, "jaeger:4317", cfg.Otel.Endpoint)
+	assert.True(t, cfg.Otel.Insecure)
+	assert.InEpsilon(t, 0.25, cfg.Otel.SampleRatio, 1e-9)
 }
 
 func TestLoadServerInvalidValues(t *testing.T) {
@@ -114,6 +124,8 @@ func TestLoadServerInvalidValues(t *testing.T) {
 		{name: "non positive integer", key: envAMQPPrefetch, value: "0", wantErr: envAMQPPrefetch + " must be positive"},
 		{name: "int64", key: envImageMaxPixels, value: "50m", wantErr: envImageMaxPixels},
 		{name: "bool", key: envS3UseSSL, value: "maybe", wantErr: envS3UseSSL},
+		{name: "float", key: envOtelSampleRatio, value: "half", wantErr: envOtelSampleRatio},
+		{name: "sample ratio above range", key: envOtelSampleRatio, value: "1.5", wantErr: envOtelSampleRatio + " must be between 0 and 1"},
 		{name: "jpeg quality above range", key: envImageJPEGQuality, value: "101", wantErr: envImageJPEGQuality + " must be at most 100"},
 		// Объявленная пустой переменная — дефолт не подставляется.
 		{name: "empty string", key: envS3Bucket, value: "", wantErr: envS3Bucket + " is required"},

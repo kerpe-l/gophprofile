@@ -62,7 +62,9 @@ type Deps struct {
 	MaxUploadBytes int64
 	// Web — страницы веб-интерфейса; без них раздел /web не монтируется.
 	Web *web.Handlers
-	Log *slog.Logger
+	// Tracing включает серверный спан на каждый запрос.
+	Tracing bool
+	Log     *slog.Logger
 }
 
 // api — состояние хендлеров.
@@ -84,6 +86,13 @@ func New(deps Deps) *chi.Mux {
 	}
 
 	r := chi.NewRouter()
+
+	// Спан открывается раньше остальных middleware, чтобы запись лога о
+	// запросе уже несла trace_id.
+	if deps.Tracing {
+		r.Use(tracing)
+	}
+
 	r.Use(requestID, logging(deps.Log), recovering(deps.Log))
 
 	r.Get(healthPath, a.health)
