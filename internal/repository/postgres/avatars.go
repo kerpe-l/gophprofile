@@ -89,6 +89,11 @@ const (
 	softDeleteQuery = `
 		UPDATE avatars SET deleted_at = NOW(), updated_at = NOW()
 		WHERE id = $1 AND deleted_at IS NULL`
+
+	storageBytesQuery = `
+		SELECT COALESCE(SUM(size_bytes), 0)
+		FROM avatars
+		WHERE deleted_at IS NULL`
 )
 
 // Create создаёт запись об аватаре и возвращает её целиком: статусы,
@@ -228,6 +233,20 @@ func statusStrings[S ~string](statuses []S) []string {
 	}
 
 	return out
+}
+
+// StorageBytes возвращает суммарный объём оригиналов живых аватаров.
+// Пустая таблица — ноль, а не ошибка.
+func (r *Repository) StorageBytes(ctx context.Context) (int64, error) {
+	ctx, cancel := r.withDeadline(ctx)
+	defer cancel()
+
+	var total int64
+	if err := r.pool.QueryRow(ctx, storageBytesQuery).Scan(&total); err != nil {
+		return 0, fmt.Errorf("sum storage bytes: %w", err)
+	}
+
+	return total, nil
 }
 
 // scanAvatar читает одну строку в модель. Принимает pgx.Row, который

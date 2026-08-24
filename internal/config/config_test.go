@@ -175,12 +175,15 @@ func TestLoadWorkerSection(t *testing.T) {
 	assert.Equal(t, defaultWorkerReconcileInterval, cfg.Worker.ReconcileInterval)
 	assert.Equal(t, defaultWorkerStuckAfter, cfg.Worker.StuckAfter)
 	assert.Equal(t, defaultWorkerReconcileBatch, cfg.Worker.ReconcileBatch)
+	assert.Equal(t, defaultWorkerMetricsAddr, cfg.Worker.MetricsAddr)
 
 	env := requiredEnv()
 	env[envWorkerReconcileBatch] = "0"
+	env[envWorkerMetricsAddr] = ""
 
 	_, err = loadWorker(mapEnv(env))
 	require.ErrorContains(t, err, envWorkerReconcileBatch+" must be positive")
+	require.ErrorContains(t, err, envWorkerMetricsAddr+" is required")
 
 	_, err = loadServer(mapEnv(env))
 	require.NoError(t, err)

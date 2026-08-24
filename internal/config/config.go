@@ -60,6 +60,7 @@ const (
 	envWorkerStuckAfter        = "WORKER_STUCK_AFTER"
 	envWorkerReconcileBatch    = "WORKER_RECONCILE_BATCH"
 	envWorkerDecodeConcurrency = "WORKER_DECODE_CONCURRENCY"
+	envWorkerMetricsAddr       = "WORKER_METRICS_ADDR"
 )
 
 // Окружения, в которых запускается сервис: от них зависит формат логов —
@@ -110,6 +111,7 @@ const (
 	defaultWorkerReconcileBatch    = 100
 	// Пиковую память воркера задаёт это число, а не prefetch.
 	defaultWorkerDecodeConcurrency = 2
+	defaultWorkerMetricsAddr       = ":9090"
 )
 
 // maxJPEGQuality — верхняя граница качества JPEG в пакете image/jpeg.
@@ -210,6 +212,8 @@ type Worker struct {
 	StuckAfter        time.Duration
 	ReconcileBatch    int
 	DecodeConcurrency int
+	// MetricsAddr — адрес листенера /metrics воркера.
+	MetricsAddr string
 }
 
 // getenv — источник переменных окружения, второе значение — объявлена ли переменная.
@@ -350,6 +354,7 @@ func load(env getenv) (*Config, error) {
 			StuckAfter:        r.duration(envWorkerStuckAfter, defaultWorkerStuckAfter),
 			ReconcileBatch:    r.integer(envWorkerReconcileBatch, defaultWorkerReconcileBatch),
 			DecodeConcurrency: r.integer(envWorkerDecodeConcurrency, defaultWorkerDecodeConcurrency),
+			MetricsAddr:       r.str(envWorkerMetricsAddr, defaultWorkerMetricsAddr),
 		},
 	}
 
@@ -447,6 +452,7 @@ func (c Worker) validate() error {
 		positiveDuration(envWorkerStuckAfter, c.StuckAfter),
 		positive(envWorkerReconcileBatch, int64(c.ReconcileBatch)),
 		positive(envWorkerDecodeConcurrency, int64(c.DecodeConcurrency)),
+		required(envWorkerMetricsAddr, c.MetricsAddr),
 	)
 }
 

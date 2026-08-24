@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"time"
 
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/attribute"
@@ -36,8 +37,14 @@ func (h *Handler) uploaded(ctx context.Context, msg broker.Message) error {
 
 	trace.SpanFromContext(ctx).SetAttributes(attribute.String(attrAvatarID, id.String()))
 
+	// Идемпотентный пропуск попыткой обработки не считается и в метрики
+	// не попадает.
+	started := time.Now()
+
 	avatar, ok, err := h.start(ctx, id)
 	if err != nil {
+		h.metrics.ObserveProcessing(false, time.Since(started))
+
 		return h.failure(ctx, id, msg, err)
 	}
 
@@ -46,9 +53,12 @@ func (h *Handler) uploaded(ctx context.Context, msg broker.Message) error {
 	}
 
 	if err := h.process(ctx, avatar); err != nil {
+		h.metrics.ObserveProcessing(false, time.Since(started))
+
 		return h.failure(ctx, id, msg, err)
 	}
 
+	h.metrics.ObserveProcessing(true, time.Since(started))
 	h.log.InfoContext(ctx, "avatar processed", slog.String("avatar_id", id.String()))
 
 	return nil

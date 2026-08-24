@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"time"
 
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel"
@@ -52,6 +53,12 @@ type Storage interface {
 	DeleteMany(ctx context.Context, keys []string) error
 }
 
+// Metrics — метрики обработки.
+type Metrics interface {
+	// ObserveProcessing учитывает одну попытку обработки загрузки.
+	ObserveProcessing(success bool, took time.Duration)
+}
+
 // Processor — создание миниатюр.
 type Processor interface {
 	// Thumbnails создаёт миниатюры всех запрошенных размеров, готовые
@@ -70,6 +77,7 @@ type Handler struct {
 	// decodeSlots ограничивает одновременные декодирования: prefetch
 	// консьюмера пиковую память не ограничивает.
 	decodeSlots chan struct{}
+	metrics     Metrics
 	tracer      trace.Tracer
 	log         *slog.Logger
 }
@@ -79,7 +87,7 @@ type Handler struct {
 // декодирований, минимум одно.
 func New(
 	repo Repository, storage Storage, processor Processor,
-	maxOriginalBytes int64, decodeConcurrency int, log *slog.Logger,
+	maxOriginalBytes int64, decodeConcurrency int, metrics Metrics, log *slog.Logger,
 ) *Handler {
 	if decodeConcurrency < 1 {
 		decodeConcurrency = 1
@@ -91,6 +99,7 @@ func New(
 		processor:        processor,
 		maxOriginalBytes: maxOriginalBytes,
 		decodeSlots:      make(chan struct{}, decodeConcurrency),
+		metrics:          metrics,
 		tracer:           otel.Tracer(tracerName),
 		log:              log,
 	}

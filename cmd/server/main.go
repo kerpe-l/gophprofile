@@ -17,6 +17,7 @@ import (
 	"github.com/kerpe-l/gophprofile/internal/config"
 	"github.com/kerpe-l/gophprofile/internal/imageproc"
 	"github.com/kerpe-l/gophprofile/internal/logger"
+	"github.com/kerpe-l/gophprofile/internal/metrics"
 	"github.com/kerpe-l/gophprofile/internal/observability"
 	"github.com/kerpe-l/gophprofile/internal/placeholder"
 	"github.com/kerpe-l/gophprofile/internal/repository/postgres"
@@ -168,14 +169,21 @@ func setup(ctx context.Context, cfg *config.Config, log *slog.Logger) (*deps, er
 	return d, nil
 }
 
-// router собирает сервис и маршруты поверх открытых зависимостей.
+// router собирает сервис, метрики и маршруты поверх открытых зависимостей.
 func (d *deps) router(cfg *config.Config, log *slog.Logger) (http.Handler, error) {
+	reg := metrics.NewRegistry()
+	reg.MustRegister(
+		metrics.NewPoolCollector(d.repo.Stat),
+		metrics.NewStorageCollector(d.repo.StorageBytes, cfg.DB.QueryTimeout, log),
+	)
+
 	svc := service.New(
 		d.repo,
 		d.storage,
 		d.publisher,
 		imageproc.New(cfg.Image),
 		placeholder.New(),
+		metrics.NewServer(reg),
 		log,
 	)
 
@@ -199,6 +207,8 @@ func (d *deps) router(cfg *config.Config, log *slog.Logger) (http.Handler, error
 		MaxUploadBytes: cfg.Image.MaxUploadBytes,
 		Web:            pages,
 		Tracing:        cfg.Otel.Endpoint != "",
+		Metrics:        metrics.NewHTTP(reg),
+		MetricsHandler: metrics.Handler(reg),
 		Log:            log,
 	}), nil
 }

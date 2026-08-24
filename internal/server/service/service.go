@@ -11,6 +11,7 @@ import (
 	"io"
 	"iter"
 	"log/slog"
+	"time"
 
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel"
@@ -65,6 +66,14 @@ type Publisher interface {
 	Publish(ctx context.Context, event broker.Event) error
 }
 
+// Metrics — бизнес-метрики сценариев.
+type Metrics interface {
+	// ObserveUpload учитывает одну попытку загрузки.
+	ObserveUpload(success bool, took time.Duration)
+	// IncDelete учитывает одну попытку удаления.
+	IncDelete(success bool)
+}
+
 // Validator — проверка загружаемого изображения.
 type Validator interface {
 	// Validate проверяет изображение и возвращает его тип и размеры,
@@ -79,6 +88,7 @@ type Service struct {
 	publisher   Publisher
 	validator   Validator
 	placeholder *placeholder.Placeholder
+	metrics     Metrics
 	tracer      trace.Tracer
 	log         *slog.Logger
 }
@@ -90,6 +100,7 @@ func New(
 	publisher Publisher,
 	validator Validator,
 	ph *placeholder.Placeholder,
+	metrics Metrics,
 	log *slog.Logger,
 ) *Service {
 	return &Service{
@@ -98,6 +109,7 @@ func New(
 		publisher:   publisher,
 		validator:   validator,
 		placeholder: ph,
+		metrics:     metrics,
 		tracer:      otel.Tracer(tracerName),
 		log:         log,
 	}

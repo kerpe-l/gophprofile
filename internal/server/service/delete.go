@@ -18,7 +18,9 @@ import (
 //
 // Чужой аватар — domain.ErrForbidden, несуществующий или уже удалённый —
 // domain.ErrNotFound.
-func (s *Service) Delete(ctx context.Context, id uuid.UUID, requesterID string) error {
+func (s *Service) Delete(ctx context.Context, id uuid.UUID, requesterID string) (err error) {
+	defer func() { s.metrics.IncDelete(err == nil) }()
+
 	ctx, span := s.tracer.Start(ctx, "service.delete",
 		trace.WithAttributes(attribute.String(attrAvatarID, id.String())))
 	defer span.End()
@@ -37,7 +39,9 @@ func (s *Service) Delete(ctx context.Context, id uuid.UUID, requesterID string) 
 
 // DeleteCurrent удаляет актуальный аватар пользователя — последний созданный
 // среди живых. Остальные аватары того же пользователя не затрагиваются.
-func (s *Service) DeleteCurrent(ctx context.Context, userID, requesterID string) error {
+func (s *Service) DeleteCurrent(ctx context.Context, userID, requesterID string) (err error) {
+	defer func() { s.metrics.IncDelete(err == nil) }()
+
 	ctx, span := s.tracer.Start(ctx, "service.delete_current",
 		trace.WithAttributes(attribute.String(attrUserID, userID)))
 	defer span.End()

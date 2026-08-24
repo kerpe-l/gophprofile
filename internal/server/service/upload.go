@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"time"
 
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/attribute"
@@ -37,7 +38,11 @@ type UploadInput struct {
 // изображение — domain.ErrImageTooBig, отказ хранилища переводит запись
 // в failed. Отказ публикации загрузку не проваливает: застрявшую запись
 // переопубликует reconciler.
-func (s *Service) Upload(ctx context.Context, in UploadInput) (domain.Avatar, error) {
+func (s *Service) Upload(ctx context.Context, in UploadInput) (_ domain.Avatar, err error) {
+	started := time.Now()
+
+	defer func() { s.metrics.ObserveUpload(err == nil, time.Since(started)) }()
+
 	ctx, span := s.tracer.Start(ctx, "service.upload",
 		trace.WithAttributes(attribute.String(attrUserID, in.UserID)))
 	defer span.End()

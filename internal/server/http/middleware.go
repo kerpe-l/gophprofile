@@ -15,11 +15,16 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/kerpe-l/gophprofile/internal/logger"
+	"github.com/kerpe-l/gophprofile/internal/metrics"
 )
 
 // maxRequestIDLen — предел длины идентификатора запроса от клиента: значение
 // попадает в каждую запись лога.
 const maxRequestIDLen = 64
+
+// routeUnmatched — значение лейбла route для запросов мимо всех маршрутов:
+// сырой путь в лейбле дал бы неограниченную кардинальность.
+const routeUnmatched = "unmatched"
 
 // requestID связывает запрос с его идентификатором: кладёт в контекст,
 // откуда его подхватывает логгер, и возвращает клиенту тем же заголовком.
@@ -67,7 +72,35 @@ func tracing(next http.Handler) http.Handler {
 	})
 
 	return otelhttp.NewHandler(renaming, "http.server",
-		otelhttp.WithFilter(func(r *http.Request) bool { return r.URL.Path != healthPath }))
+		otelhttp.WithFilter(func(r *http.Request) bool {
+			return r.URL.Path != healthPath && r.URL.Path != metricsPath
+		}))
+}
+
+// measuring считает RED-метрики запроса. Route pattern берётся после роутинга,
+// как и имя спана в tracing; health и scrape метрик не измеряются.
+func measuring(m *metrics.HTTP) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == healthPath || r.URL.Path == metricsPath {
+				next.ServeHTTP(w, r)
+
+				return
+			}
+
+			started := time.Now()
+			rec := &recorder{ResponseWriter: w, status: http.StatusOK}
+
+			next.ServeHTTP(rec, r)
+
+			route := chi.RouteContext(r.Context()).RoutePattern()
+			if route == "" {
+				route = routeUnmatched
+			}
+
+			m.Observe(r.Method, route, rec.status, time.Since(started))
+		})
+	}
 }
 
 // logging пишет одну запись на запрос — с кодом ответа и длительностью.

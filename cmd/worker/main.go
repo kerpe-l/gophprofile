@@ -4,19 +4,24 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"sync"
 	"syscall"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/kerpe-l/gophprofile/internal/broker"
 	"github.com/kerpe-l/gophprofile/internal/buildinfo"
 	"github.com/kerpe-l/gophprofile/internal/config"
 	"github.com/kerpe-l/gophprofile/internal/imageproc"
 	"github.com/kerpe-l/gophprofile/internal/logger"
+	"github.com/kerpe-l/gophprofile/internal/metrics"
 	"github.com/kerpe-l/gophprofile/internal/observability"
 	"github.com/kerpe-l/gophprofile/internal/repository/postgres"
 	"github.com/kerpe-l/gophprofile/internal/storage/s3"
@@ -29,6 +34,16 @@ const serviceName = "gophprofile-worker"
 
 // otelShutdownTimeout — предел на финальный сброс очереди спанов.
 const otelShutdownTimeout = 5 * time.Second
+
+// Таймауты листенера метрик: scrape — маленький локальный GET,
+// долгие пределы ему не нужны.
+const (
+	metricsReadHeaderTimeout = 5 * time.Second
+	metricsReadTimeout       = 10 * time.Second
+	metricsWriteTimeout      = 10 * time.Second
+	metricsIdleTimeout       = time.Minute
+	metricsShutdownTimeout   = 5 * time.Second
+)
 
 func main() {
 	if err := run(); err != nil {
@@ -76,6 +91,9 @@ func run() error {
 		}
 	}()
 
+	reg := metrics.NewRegistry()
+	reg.MustRegister(metrics.NewPoolCollector(app.repo.Stat))
+
 	// Добор живёт ровно столько же, сколько потребление: оборвавшееся
 	// соединение с брокером оставило бы тикер публиковать события в никуда.
 	runCtx, cancel := context.WithCancel(ctx)
@@ -87,22 +105,75 @@ func run() error {
 		app.reconciler(cfg, log).Run(runCtx)
 	})
 
-	log.Info("worker started")
+	metricsSrv := metricsServer(cfg.Worker.MetricsAddr, reg)
+
+	// ErrServerClosed — штатное завершение по Shutdown, в канал не попадает.
+	metricsErr := make(chan error, 1)
+
+	go func() {
+		if err := metricsSrv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+			metricsErr <- err
+		}
+	}()
+
+	log.Info("worker started", slog.String("metrics_addr", cfg.Worker.MetricsAddr))
 
 	// Отмена контекста прекращает приём новых сообщений; взятые в работу
 	// дорабатываются, и только после этого Consume возвращается.
-	err = app.consumer.Consume(ctx, app.handler(cfg, log).Handle)
+	consumeErr := make(chan error, 1)
+
+	go func() {
+		consumeErr <- app.consumer.Consume(runCtx, app.handler(cfg, metrics.NewWorker(reg), log).Handle)
+	}()
+
+	select {
+	case cerr := <-consumeErr:
+		if cerr != nil {
+			err = fmt.Errorf("consume events: %w", cerr)
+		}
+	case merr := <-metricsErr:
+		// Воркер без метрик — слепое пятно мониторинга: останавливаемся.
+		cancel()
+
+		if cerr := <-consumeErr; cerr != nil {
+			log.Error("consume events", slog.Any("error", cerr))
+		}
+
+		err = fmt.Errorf("serve metrics on %s: %w", cfg.Worker.MetricsAddr, merr)
+	}
 
 	cancel()
 	wg.Wait()
 
+	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), metricsShutdownTimeout)
+	defer cancelShutdown()
+
+	if serr := metricsSrv.Shutdown(shutdownCtx); serr != nil {
+		log.Error("shutdown metrics server", slog.Any("error", serr))
+	}
+
 	if err != nil {
-		return fmt.Errorf("consume events: %w", err)
+		return err
 	}
 
 	log.Info("worker stopped")
 
 	return nil
+}
+
+// metricsServer — листенер, отдающий воркеру только /metrics.
+func metricsServer(addr string, reg *prometheus.Registry) *http.Server {
+	mux := http.NewServeMux()
+	mux.Handle("GET /metrics", metrics.Handler(reg))
+
+	return &http.Server{
+		Addr:              addr,
+		Handler:           mux,
+		ReadHeaderTimeout: metricsReadHeaderTimeout,
+		ReadTimeout:       metricsReadTimeout,
+		WriteTimeout:      metricsWriteTimeout,
+		IdleTimeout:       metricsIdleTimeout,
+	}
 }
 
 // deps — зависимости воркера, живущие столько же, сколько процесс.
@@ -160,9 +231,9 @@ func setup(ctx context.Context, cfg *config.Config, log *slog.Logger) (*deps, er
 }
 
 // handler собирает обработчик событий поверх открытых зависимостей.
-func (d *deps) handler(cfg *config.Config, log *slog.Logger) *handler.Handler {
+func (d *deps) handler(cfg *config.Config, m *metrics.Worker, log *slog.Logger) *handler.Handler {
 	return handler.New(d.repo, d.storage, imageproc.New(cfg.Image),
-		cfg.Image.MaxUploadBytes, cfg.Worker.DecodeConcurrency, log)
+		cfg.Image.MaxUploadBytes, cfg.Worker.DecodeConcurrency, m, log)
 }
 
 // reconciler собирает добор зависших загрузок поверх открытых зависимостей.

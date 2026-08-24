@@ -72,6 +72,11 @@ func (r *Repository) Close() {
 	r.pool.Close()
 }
 
+// Stat возвращает снимок статистики пула соединений.
+func (r *Repository) Stat() *pgxpool.Stat {
+	return r.pool.Stat()
+}
+
 // Ping проверяет, что база отвечает.
 func (r *Repository) Ping(ctx context.Context) error {
 	ctx, cancel := r.withDeadline(ctx)
