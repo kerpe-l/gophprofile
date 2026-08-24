@@ -90,7 +90,7 @@
     {
       "id": 6,
       "type": "timeseries",
-      "title": "Storage used",
+      "title": "Live originals size",
       "gridPos": { "x": 0, "y": 16, "w": 16, "h": 8 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
@@ -106,7 +106,7 @@
     {
       "id": 7,
       "type": "stat",
-      "title": "Storage used (now)",
+      "title": "Live originals size (now)",
       "gridPos": { "x": 16, "y": 16, "w": 8, "h": 8 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "fieldConfig": {

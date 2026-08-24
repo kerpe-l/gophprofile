@@ -285,8 +285,15 @@ func (c *Consumer) forward(ctx context.Context, exchange, key string, delivery a
 	})
 }
 
+// ack подтверждает сообщение. Неподтверждённое сообщение брокер доставит
+// повторно, поэтому отказ Ack записывается и в спан обработки.
 func (c *Consumer) ack(ctx context.Context, delivery amqp.Delivery) {
 	if err := delivery.Ack(false); err != nil {
+		span := trace.SpanFromContext(ctx)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "acknowledge message: "+err.Error())
+		span.SetAttributes(attribute.String("outcome", "ack_failed"))
+
 		c.log.ErrorContext(ctx, "acknowledge message",
 			slog.Any("error", err),
 			slog.String("message_id", delivery.MessageId),

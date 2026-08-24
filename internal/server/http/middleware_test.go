@@ -83,16 +83,18 @@ func TestUnknownRoute(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, w.Code)
 }
 
-// В лейбле route — pattern роутера, а не сырой путь: иначе каждый
-// идентификатор аватара дал бы новую серию.
+// В лейбле route — pattern роутера, а не сырой путь, в лейбле method —
+// значение из стандартного набора: иначе каждый идентификатор аватара
+// и каждый выдуманный клиентом метод дали бы новую серию.
 func TestMeasuring(t *testing.T) {
 	t.Parallel()
 
 	reg := metrics.NewRegistry()
-	router := newMeasuredRouter(t, &fakeService{avatar: completedAvatar()}, reg)
+	router := newMeasuredRouter(t, &fakeService{avatar: completedAvatar()}, reg, slog.New(slog.DiscardHandler))
 
 	do(t, router, request(t, http.MethodGet, "/api/v1/avatars/"+completedAvatar().ID.String()+"/metadata"))
 	do(t, router, request(t, http.MethodGet, "/nowhere"))
+	do(t, router, request(t, "INVENTED", "/nowhere"))
 	do(t, router, request(t, http.MethodGet, "/health"))
 
 	w := do(t, router, request(t, http.MethodGet, "/metrics"))
@@ -103,13 +105,36 @@ func TestMeasuring(t *testing.T) {
 		`http_requests_total{method="GET",route="/api/v1/avatars/{avatar_id}/metadata",status="200"} 1`)
 	assert.Contains(t, body,
 		`http_requests_total{method="GET",route="unmatched",status="404"} 1`)
+	assert.Contains(t, body,
+		`http_requests_total{method="_OTHER",route="unmatched",status="405"} 1`)
+	assert.NotContains(t, body, `method="INVENTED"`)
+	// Бакеты покрывают и длительность заливки, ограниченную минутами.
+	assert.Contains(t, body, `le="180"`)
 	// Health и сам scrape в RED не попадают.
 	assert.NotContains(t, body, `route="/health"`)
 	assert.NotContains(t, body, `route="/metrics"`)
 }
 
+// Периодический scrape метрик не пишется в access-лог на Info.
+func TestLoggingMetricsScrapeAtDebug(t *testing.T) {
+	t.Parallel()
+
+	var buf strings.Builder
+
+	log := slog.New(slog.NewTextHandler(&buf, nil))
+
+	reg := metrics.NewRegistry()
+	router := newMeasuredRouter(t, &fakeService{avatar: completedAvatar()}, reg, log)
+
+	do(t, router, request(t, http.MethodGet, "/metrics"))
+	do(t, router, request(t, http.MethodGet, "/api/v1/avatars/"+completedAvatar().ID.String()+"/metadata"))
+
+	assert.NotContains(t, buf.String(), "/metrics")
+	assert.Contains(t, buf.String(), "/metadata")
+}
+
 // newMeasuredRouter — роутер с включёнными RED-метриками и маршрутом /metrics.
-func newMeasuredRouter(t *testing.T, svc *fakeService, reg *prometheus.Registry) http.Handler {
+func newMeasuredRouter(t *testing.T, svc *fakeService, reg *prometheus.Registry, log *slog.Logger) http.Handler {
 	t.Helper()
 
 	return serverhttp.New(serverhttp.Deps{
@@ -121,6 +146,6 @@ func newMeasuredRouter(t *testing.T, svc *fakeService, reg *prometheus.Registry)
 		MaxUploadBytes: testMaxBytes,
 		Metrics:        metrics.NewHTTP(reg),
 		MetricsHandler: metrics.Handler(reg),
-		Log:            slog.New(slog.DiscardHandler),
+		Log:            log,
 	})
 }

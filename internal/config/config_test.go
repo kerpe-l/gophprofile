@@ -126,6 +126,9 @@ func TestLoadServerInvalidValues(t *testing.T) {
 		{name: "bool", key: envS3UseSSL, value: "maybe", wantErr: envS3UseSSL},
 		{name: "float", key: envOtelSampleRatio, value: "half", wantErr: envOtelSampleRatio},
 		{name: "sample ratio above range", key: envOtelSampleRatio, value: "1.5", wantErr: envOtelSampleRatio + " must be between 0 and 1"},
+		// ParseFloat принимает NaN и Inf как валидные числа.
+		{name: "sample ratio NaN", key: envOtelSampleRatio, value: "NaN", wantErr: envOtelSampleRatio + " must be between 0 and 1"},
+		{name: "sample ratio Inf", key: envOtelSampleRatio, value: "+Inf", wantErr: envOtelSampleRatio + " must be between 0 and 1"},
 		{name: "jpeg quality above range", key: envImageJPEGQuality, value: "101", wantErr: envImageJPEGQuality + " must be at most 100"},
 		// Объявленная пустой переменная — дефолт не подставляется.
 		{name: "empty string", key: envS3Bucket, value: "", wantErr: envS3Bucket + " is required"},

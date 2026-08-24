@@ -26,6 +26,23 @@ const maxRequestIDLen = 64
 // сырой путь в лейбле дал бы неограниченную кардинальность.
 const routeUnmatched = "unmatched"
 
+// methodOther — значение для нестандартных HTTP-методов в лейбле метрики
+// и имени спана: метод приходит от клиента, и сырое значение дало бы
+// неограниченную кардинальность.
+const methodOther = "_OTHER"
+
+// normalizeMethod сводит методы вне стандартного набора к methodOther.
+func normalizeMethod(method string) string {
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut,
+		http.MethodPatch, http.MethodDelete, http.MethodConnect,
+		http.MethodOptions, http.MethodTrace:
+		return method
+	default:
+		return methodOther
+	}
+}
+
 // requestID связывает запрос с его идентификатором: кладёт в контекст,
 // откуда его подхватывает логгер, и возвращает клиенту тем же заголовком.
 func requestID(next http.Handler) http.Handler {
@@ -66,7 +83,7 @@ func tracing(next http.Handler) http.Handler {
 
 		if pattern := chi.RouteContext(r.Context()).RoutePattern(); pattern != "" {
 			span := trace.SpanFromContext(r.Context())
-			span.SetName(r.Method + " " + pattern)
+			span.SetName(normalizeMethod(r.Method) + " " + pattern)
 			span.SetAttributes(semconv.HTTPRoute(pattern))
 		}
 	})
@@ -98,7 +115,7 @@ func measuring(m *metrics.HTTP) func(http.Handler) http.Handler {
 				route = routeUnmatched
 			}
 
-			m.Observe(r.Method, route, rec.status, time.Since(started))
+			m.Observe(normalizeMethod(r.Method), route, rec.status, time.Since(started))
 		})
 	}
 }
@@ -112,7 +129,12 @@ func logging(log *slog.Logger) func(http.Handler) http.Handler {
 
 			next.ServeHTTP(rec, r)
 
+			// Периодический scrape метрик пишется на Debug.
 			level := slog.LevelInfo
+			if r.URL.Path == metricsPath {
+				level = slog.LevelDebug
+			}
+
 			if rec.status >= http.StatusInternalServerError {
 				level = slog.LevelError
 			}

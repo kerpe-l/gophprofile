@@ -114,7 +114,7 @@
     {
       "id": 5,
       "type": "stat",
-      "title": "Storage used",
+      "title": "Live originals size",
       "gridPos": { "x": 16, "y": 0, "w": 4, "h": 4 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "fieldConfig": {

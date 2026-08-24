@@ -2,6 +2,7 @@ package broker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/propagation"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -85,10 +87,11 @@ func TestNewPublishingTraceContext(t *testing.T) {
 
 // fakeAcknowledger подтверждает доставки без брокера.
 type fakeAcknowledger struct {
-	acked bool
+	acked  bool
+	ackErr error
 }
 
-func (a *fakeAcknowledger) Ack(uint64, bool) error { a.acked = true; return nil }
+func (a *fakeAcknowledger) Ack(uint64, bool) error { a.acked = true; return a.ackErr }
 
 func (a *fakeAcknowledger) Nack(uint64, bool, bool) error { return nil }
 
@@ -159,4 +162,38 @@ func TestProcessConsumerSpan(t *testing.T) {
 			assert.Equal(t, tc.wantStatus, span.Status().Code)
 		})
 	}
+}
+
+// Неподтверждённое сообщение будет доставлено повторно, поэтому успешная
+// обработка с проваленным Ack не выглядит в трейсе успехом.
+//
+//nolint:paralleltest // тест подменяет глобальный propagator
+func TestProcessAckFailureInSpan(t *testing.T) {
+	setupPropagator(t)
+
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+
+	c := &Consumer{
+		log:     slog.New(slog.DiscardHandler),
+		tracer:  provider.Tracer(tracerName),
+		levels:  newRetryLevels(defaultRetryDelays()),
+		timeout: time.Minute,
+	}
+
+	delivery := amqp.Delivery{
+		Acknowledger: &fakeAcknowledger{ackErr: errors.New("channel closed")},
+		Type:         RoutingKeyUploaded,
+		MessageId:    "msg-1",
+		Body:         []byte("{}"),
+	}
+
+	c.process(t.Context(), func(context.Context, Message) error { return nil }, delivery)
+
+	spans := recorder.Ended()
+	require.Len(t, spans, 1)
+
+	span := spans[0]
+	assert.Equal(t, codes.Error, span.Status().Code)
+	assert.Contains(t, span.Attributes(), attribute.String("outcome", "ack_failed"))
 }

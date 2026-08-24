@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -425,7 +426,8 @@ func (c AMQP) validate() error {
 
 // validate не требует Endpoint: пустое значение — выключенный трейсинг.
 func (c Otel) validate() error {
-	if c.SampleRatio < 0 || c.SampleRatio > 1 {
+	// ParseFloat принимает "NaN", а обе проверки диапазона для NaN ложны.
+	if math.IsNaN(c.SampleRatio) || c.SampleRatio < 0 || c.SampleRatio > 1 {
 		return fmt.Errorf("%s must be between 0 and 1", envOtelSampleRatio)
 	}
 

@@ -25,21 +25,23 @@ import (
 // миниатюры в хранилище → ключи и completed одним запросом. Ключ появляется
 // в базе только после самого объекта, иначе раздача сошлётся на пустоту.
 func (h *Handler) uploaded(ctx context.Context, msg broker.Message) error {
+	started := time.Now()
+
 	var event broker.AvatarUploadEvent
 	if err := json.Unmarshal(msg.Body, &event); err != nil {
+		h.metrics.ObserveProcessing(false, time.Since(started))
+
 		return nonRetryable(fmt.Errorf("decode upload event %s: %w", msg.MessageID, err))
 	}
 
 	id, err := uuid.Parse(event.AvatarID)
 	if err != nil {
+		h.metrics.ObserveProcessing(false, time.Since(started))
+
 		return nonRetryable(fmt.Errorf("parse avatar id %q of message %s: %w", event.AvatarID, msg.MessageID, err))
 	}
 
 	trace.SpanFromContext(ctx).SetAttributes(attribute.String(attrAvatarID, id.String()))
-
-	// Идемпотентный пропуск попыткой обработки не считается и в метрики
-	// не попадает.
-	started := time.Now()
 
 	avatar, ok, err := h.start(ctx, id)
 	if err != nil {
@@ -48,6 +50,8 @@ func (h *Handler) uploaded(ctx context.Context, msg broker.Message) error {
 		return h.failure(ctx, id, msg, err)
 	}
 
+	// Идемпотентный пропуск попыткой обработки не считается и в метрики
+	// не попадает.
 	if !ok {
 		return nil
 	}
