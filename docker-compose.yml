@@ -199,6 +199,7 @@ services:
       - "127.0.0.1:${GRAFANA_PORT:-3000}:3000"
     volumes:
       - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/grafana/dashboards:/var/lib/grafana/dashboards:ro
       - grafana-data:/var/lib/grafana
     restart: unless-stopped
 
