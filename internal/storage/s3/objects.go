@@ -8,8 +8,11 @@ import (
 	"iter"
 
 	"github.com/minio/minio-go/v7"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/kerpe-l/gophprofile/internal/domain"
+	"github.com/kerpe-l/gophprofile/internal/observability"
 )
 
 // defaultContentType — тип содержимого для объекта, у которого он не задан.
@@ -21,6 +24,12 @@ const defaultContentType = "application/octet-stream"
 // Повторной попытки при временной ошибке не будет, если r не умеет Seek:
 // перемотать уже прочитанный поток нечем.
 func (s *Storage) Put(ctx context.Context, key string, r io.Reader, size int64, contentType string) error {
+	ctx, span := s.tracer.Start(ctx, "s3.put", trace.WithAttributes(
+		attribute.String(attrBucket, s.bucket),
+		attribute.String(attrKey, key),
+	))
+	defer span.End()
+
 	ctx, cancel := s.withDeadline(ctx)
 	defer cancel()
 
@@ -32,7 +41,7 @@ func (s *Storage) Put(ctx context.Context, key string, r io.Reader, size int64, 
 		ContentType: contentType,
 	})
 	if err != nil {
-		return mapError("put object", key, err)
+		return observability.SpanError(span, mapError("put object", key, err))
 	}
 
 	return nil
@@ -42,11 +51,18 @@ func (s *Storage) Put(ctx context.Context, key string, r io.Reader, size int64, 
 // Тело обязано быть закрыто вызывающим, в том числе при обрыве чтения.
 //
 // Своего предела времени Get не ставит: тело читается после возврата
-// из метода. Ограничить выдачу — задача вызывающего.
+// из метода. Ограничить выдачу — задача вызывающего. Спан по той же причине
+// покрывает только открытие объекта, без чтения тела.
 func (s *Storage) Get(ctx context.Context, key string) (domain.StoredObject, error) {
+	ctx, span := s.tracer.Start(ctx, "s3.get", trace.WithAttributes(
+		attribute.String(attrBucket, s.bucket),
+		attribute.String(attrKey, key),
+	))
+	defer span.End()
+
 	obj, err := s.client.GetObject(ctx, s.bucket, key, minio.GetObjectOptions{})
 	if err != nil {
-		return domain.StoredObject{}, mapError("get object", key, err)
+		return domain.StoredObject{}, observability.SpanError(span, mapError("get object", key, err))
 	}
 
 	// Запрос к хранилищу клиент откладывает до первого чтения, поэтому Stat
@@ -58,7 +74,7 @@ func (s *Storage) Get(ctx context.Context, key string) (domain.StoredObject, err
 		// её не уточняет.
 		_ = obj.Close()
 
-		return domain.StoredObject{}, mapError("get object", key, err)
+		return domain.StoredObject{}, observability.SpanError(span, mapError("get object", key, err))
 	}
 
 	return domain.StoredObject{
@@ -80,12 +96,18 @@ func (s *Storage) DeleteMany(ctx context.Context, keys []string) error {
 		return nil
 	}
 
+	ctx, span := s.tracer.Start(ctx, "s3.delete_many", trace.WithAttributes(
+		attribute.String(attrBucket, s.bucket),
+		attribute.Int("s3.keys", len(keys)),
+	))
+	defer span.End()
+
 	ctx, cancel := s.withDeadline(ctx)
 	defer cancel()
 
 	results, err := s.client.RemoveObjectsWithIter(ctx, s.bucket, objectInfos(keys), minio.RemoveObjectsOptions{})
 	if err != nil {
-		return fmt.Errorf("delete objects: %w", err)
+		return observability.SpanError(span, fmt.Errorf("delete objects: %w", err))
 	}
 
 	var errs []error
@@ -97,7 +119,7 @@ func (s *Storage) DeleteMany(ctx context.Context, keys []string) error {
 	}
 
 	if err := errors.Join(errs...); err != nil {
-		return fmt.Errorf("delete objects: %w", err)
+		return observability.SpanError(span, fmt.Errorf("delete objects: %w", err))
 	}
 
 	return nil

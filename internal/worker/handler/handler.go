@@ -10,12 +10,24 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/kerpe-l/gophprofile/internal/broker"
 	"github.com/kerpe-l/gophprofile/internal/domain"
+	"github.com/kerpe-l/gophprofile/internal/observability"
 )
+
+// tracerName — имя инструментации пакета в трейсах.
+const tracerName = "github.com/kerpe-l/gophprofile/internal/worker/handler"
+
+// attrAvatarID — имя атрибута спана с идентификатором аватара.
+const attrAvatarID = "avatar_id"
 
 // Repository — метаданные аватаров.
 type Repository interface {
@@ -41,6 +53,12 @@ type Storage interface {
 	DeleteMany(ctx context.Context, keys []string) error
 }
 
+// Metrics — метрики обработки.
+type Metrics interface {
+	// ObserveProcessing учитывает одну попытку обработки загрузки.
+	ObserveProcessing(success bool, took time.Duration)
+}
+
 // Processor — создание миниатюр.
 type Processor interface {
 	// Thumbnails создаёт миниатюры всех запрошенных размеров, готовые
@@ -59,6 +77,8 @@ type Handler struct {
 	// decodeSlots ограничивает одновременные декодирования: prefetch
 	// консьюмера пиковую память не ограничивает.
 	decodeSlots chan struct{}
+	metrics     Metrics
+	tracer      trace.Tracer
 	log         *slog.Logger
 }
 
@@ -67,7 +87,7 @@ type Handler struct {
 // декодирований, минимум одно.
 func New(
 	repo Repository, storage Storage, processor Processor,
-	maxOriginalBytes int64, decodeConcurrency int, log *slog.Logger,
+	maxOriginalBytes int64, decodeConcurrency int, metrics Metrics, log *slog.Logger,
 ) *Handler {
 	if decodeConcurrency < 1 {
 		decodeConcurrency = 1
@@ -79,6 +99,8 @@ func New(
 		processor:        processor,
 		maxOriginalBytes: maxOriginalBytes,
 		decodeSlots:      make(chan struct{}, decodeConcurrency),
+		metrics:          metrics,
+		tracer:           otel.Tracer(tracerName),
 		log:              log,
 	}
 }
@@ -86,6 +108,21 @@ func New(
 // Handle обрабатывает одно доставленное событие. Тип берётся из свойства
 // сообщения: ключ маршрутизации при возврате с лестницы повторов переписан.
 func (h *Handler) Handle(ctx context.Context, msg broker.Message) error {
+	ctx, span := h.tracer.Start(ctx, "handle "+msg.Type, trace.WithAttributes(
+		semconv.MessagingMessageID(msg.MessageID),
+		attribute.Int("attempt", msg.Attempt),
+	))
+	defer span.End()
+
+	if err := h.dispatch(ctx, msg); err != nil {
+		return observability.SpanError(span, err)
+	}
+
+	return nil
+}
+
+// dispatch выбирает обработчик по типу события.
+func (h *Handler) dispatch(ctx context.Context, msg broker.Message) error {
 	switch msg.Type {
 	case broker.RoutingKeyUploaded:
 		return h.uploaded(ctx, msg)

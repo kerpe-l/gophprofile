@@ -374,7 +374,7 @@ func TestHandleUploadedRealImage(t *testing.T) {
 	h := handler.New(d.repo, d.storage, imageproc.New(config.Image{
 		MaxPixels:   50_000_000,
 		JPEGQuality: 85,
-	}), maxOriginalBytes, 2, slog.New(slog.DiscardHandler))
+	}), maxOriginalBytes, 2, d.metrics, slog.New(slog.DiscardHandler))
 
 	require.NoError(t, h.Handle(t.Context(), uploadMessage(t, avatar)))
 	require.Len(t, d.storage.puts, 2)
@@ -419,4 +419,82 @@ func TestHandleDeletedRetryable(t *testing.T) {
 	err := newHandler(t, d).Handle(t.Context(), deleteMessage(t, id, []string{domain.OriginalKey(id)}))
 	require.ErrorIs(t, err, errUnavailable)
 	assert.NotErrorIs(t, err, broker.ErrNonRetryable)
+}
+
+// Идемпотентный пропуск и уборка по avatar.deleted попытками обработки
+// не считаются: в метрики попадают только реальные попытки.
+func TestHandleReportsProcessingMetrics(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		prepare func(avatar *domain.Avatar, d *deps)
+		want    []bool
+	}{
+		{name: "processed", prepare: func(*domain.Avatar, *deps) {}, want: []bool{true}},
+		{name: "already completed", prepare: func(avatar *domain.Avatar, d *deps) {
+			avatar.ProcessingStatus = domain.ProcessingStatusCompleted
+			d.repo.avatar = *avatar
+		}, want: nil},
+		{name: "original unavailable", prepare: func(_ *domain.Avatar, d *deps) {
+			d.storage.getErr = errUnavailable
+		}, want: []bool{false}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			avatar := newAvatar()
+			d := newDeps(avatar)
+			tc.prepare(&avatar, d)
+
+			_ = newHandler(t, d).Handle(t.Context(), uploadMessage(t, avatar))
+
+			assert.Equal(t, tc.want, d.metrics.processed())
+		})
+	}
+}
+
+// Событие, которое не удалось даже разобрать, — реальный отказ обработки,
+// и он обязан попасть в метрики.
+func TestHandleMalformedUploadCountedAsError(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "malformed body", body: "{not json"},
+		{name: "avatar id is not a uuid", body: `{"message_id":"m-1","avatar_id":"not-a-uuid"}`},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			avatar := newAvatar()
+			d := newDeps(avatar)
+
+			msg := uploadMessage(t, avatar)
+			msg.Body = []byte(tc.body)
+
+			err := newHandler(t, d).Handle(t.Context(), msg)
+			require.ErrorIs(t, err, broker.ErrNonRetryable)
+
+			assert.Equal(t, []bool{false}, d.metrics.processed())
+		})
+	}
+}
+
+func TestHandleDeletedNotCountedAsProcessing(t *testing.T) {
+	t.Parallel()
+
+	avatar := newAvatar()
+	d := newDeps(avatar)
+
+	require.NoError(t, newHandler(t, d).Handle(t.Context(),
+		deleteMessage(t, avatar.ID, []string{avatar.S3Key})))
+
+	assert.Empty(t, d.metrics.processed())
 }

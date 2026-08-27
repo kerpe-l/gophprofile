@@ -8,8 +8,12 @@ import (
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
+	"go.opentelemetry.io/otel"
+	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/kerpe-l/gophprofile/internal/logger"
+	"github.com/kerpe-l/gophprofile/internal/observability"
 )
 
 // contentTypeJSON — тип содержимого сообщений.
@@ -18,7 +22,8 @@ const contentTypeJSON = "application/json"
 // Publisher отправляет события в брокер и ждёт подтверждения от него.
 // Публикации сериализуются: канал AMQP не рассчитан на параллельную запись.
 type Publisher struct {
-	conn *amqp.Connection
+	conn   *amqp.Connection
+	tracer trace.Tracer
 	// timeout — предел на одну публикацию вместе с ожиданием подтверждения.
 	timeout time.Duration
 
@@ -34,19 +39,49 @@ type Publisher struct {
 // публикации; отдельно закрывать публикатора нужно только там, где он живёт
 // меньше соединения.
 func (c *Conn) Publisher() *Publisher {
-	return &Publisher{conn: c.conn, timeout: c.timeout}
+	return &Publisher{conn: c.conn, tracer: otel.Tracer(tracerName), timeout: c.timeout}
 }
 
 // Publish отправляет событие и возвращается только после подтверждения
-// брокером. Идентификатор запроса из контекста уезжает вместе с сообщением,
-// чтобы записи обработчика в логе связывались с породившим их запросом.
+// брокером. Идентификатор запроса и контекст трейса уезжают вместе
+// с сообщением, чтобы обработка на стороне воркера связывалась
+// с породившим её запросом.
 func (p *Publisher) Publish(ctx context.Context, event Event) error {
-	body, err := json.Marshal(event)
+	ctx, span := p.tracer.Start(ctx, "publish "+event.RoutingKey(),
+		trace.WithSpanKind(trace.SpanKindProducer),
+		trace.WithAttributes(
+			semconv.MessagingSystemRabbitMQ,
+			semconv.MessagingDestinationName(exchangeEvents),
+			semconv.MessagingRabbitMQDestinationRoutingKey(event.RoutingKey()),
+			semconv.MessagingMessageID(event.ID()),
+		))
+	defer span.End()
+
+	msg, err := newPublishing(ctx, event)
 	if err != nil {
-		return fmt.Errorf("encode event %s: %w", event.ID(), err)
+		return observability.SpanError(span, err)
 	}
 
-	msg := amqp.Publishing{
+	if err := p.publish(ctx, exchangeEvents, event.RoutingKey(), msg); err != nil {
+		return observability.SpanError(span, fmt.Errorf("publish event %s: %w", event.ID(), err))
+	}
+
+	return nil
+}
+
+// newPublishing собирает сообщение события, вписав контекст трейса
+// в его заголовки.
+func newPublishing(ctx context.Context, event Event) (amqp.Publishing, error) {
+	body, err := json.Marshal(event)
+	if err != nil {
+		return amqp.Publishing{}, fmt.Errorf("encode event %s: %w", event.ID(), err)
+	}
+
+	headers := amqp.Table{}
+	otel.GetTextMapPropagator().Inject(ctx, headerCarrier(headers))
+
+	return amqp.Publishing{
+		Headers:       headers,
 		ContentType:   contentTypeJSON,
 		DeliveryMode:  amqp.Persistent,
 		MessageId:     event.ID(),
@@ -54,13 +89,7 @@ func (p *Publisher) Publish(ctx context.Context, event Event) error {
 		Type:          event.RoutingKey(),
 		Timestamp:     time.Now(),
 		Body:          body,
-	}
-
-	if err := p.publish(ctx, exchangeEvents, event.RoutingKey(), msg); err != nil {
-		return fmt.Errorf("publish event %s: %w", event.ID(), err)
-	}
-
-	return nil
+	}, nil
 }
 
 // Close закрывает канал публикатора. Повторный вызов безопасен.

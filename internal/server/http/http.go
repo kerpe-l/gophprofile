@@ -11,14 +11,16 @@ import (
 
 	"github.com/kerpe-l/gophprofile/internal/config"
 	"github.com/kerpe-l/gophprofile/internal/domain"
+	"github.com/kerpe-l/gophprofile/internal/metrics"
 	"github.com/kerpe-l/gophprofile/internal/server/service"
 	"github.com/kerpe-l/gophprofile/internal/server/web"
 )
 
-// Префикс REST API и путь проверки состояния.
+// Префикс REST API и служебные пути.
 const (
-	apiPrefix  = "/api/v1"
-	healthPath = "/health"
+	apiPrefix   = "/api/v1"
+	healthPath  = "/health"
+	metricsPath = "/metrics"
 )
 
 // Имена компонентов в ответе /health.
@@ -62,7 +64,13 @@ type Deps struct {
 	MaxUploadBytes int64
 	// Web — страницы веб-интерфейса; без них раздел /web не монтируется.
 	Web *web.Handlers
-	Log *slog.Logger
+	// Tracing включает серверный спан на каждый запрос.
+	Tracing bool
+	// Metrics включает RED-метрики на каждый запрос.
+	Metrics *metrics.HTTP
+	// MetricsHandler — выдача метрик; без него /metrics не монтируется.
+	MetricsHandler http.Handler
+	Log            *slog.Logger
 }
 
 // api — состояние хендлеров.
@@ -84,9 +92,24 @@ func New(deps Deps) *chi.Mux {
 	}
 
 	r := chi.NewRouter()
+
+	// Спан открывается раньше остальных middleware, чтобы запись лога о
+	// запросе уже несла trace_id.
+	if deps.Tracing {
+		r.Use(tracing)
+	}
+
+	if deps.Metrics != nil {
+		r.Use(measuring(deps.Metrics))
+	}
+
 	r.Use(requestID, logging(deps.Log), recovering(deps.Log))
 
 	r.Get(healthPath, a.health)
+
+	if deps.MetricsHandler != nil {
+		r.Method(http.MethodGet, metricsPath, deps.MetricsHandler)
+	}
 
 	r.Route(apiPrefix, func(r chi.Router) {
 		r.Group(func(r chi.Router) {

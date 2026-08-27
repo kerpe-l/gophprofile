@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -47,6 +48,10 @@ const (
 	envAMQPPrefetch = "AMQP_PREFETCH"
 	envAMQPTimeout  = "AMQP_TIMEOUT"
 
+	envOtelEndpoint    = "OTEL_EXPORTER_OTLP_ENDPOINT"
+	envOtelInsecure    = "OTEL_EXPORTER_OTLP_INSECURE"
+	envOtelSampleRatio = "OTEL_TRACES_SAMPLE_RATIO"
+
 	envImageMaxUploadBytes = "IMAGE_MAX_UPLOAD_BYTES"
 	envImageMaxPixels      = "IMAGE_MAX_PIXELS"
 	envImageJPEGQuality    = "IMAGE_JPEG_QUALITY"
@@ -56,6 +61,7 @@ const (
 	envWorkerStuckAfter        = "WORKER_STUCK_AFTER"
 	envWorkerReconcileBatch    = "WORKER_RECONCILE_BATCH"
 	envWorkerDecodeConcurrency = "WORKER_DECODE_CONCURRENCY"
+	envWorkerMetricsAddr       = "WORKER_METRICS_ADDR"
 )
 
 // Окружения, в которых запускается сервис: от них зависит формат логов —
@@ -90,6 +96,8 @@ const (
 	defaultAMQPPrefetch = 8
 	defaultAMQPTimeout  = 10 * time.Second
 
+	defaultOtelSampleRatio = 1.0
+
 	defaultImageMaxUploadBytes int64 = 10 << 20 // 10 MB
 	// Ограничивает память, необходимую для декодирования.
 	defaultImageMaxPixels   int64 = 50_000_000
@@ -104,6 +112,7 @@ const (
 	defaultWorkerReconcileBatch    = 100
 	// Пиковую память воркера задаёт это число, а не prefetch.
 	defaultWorkerDecodeConcurrency = 2
+	defaultWorkerMetricsAddr       = ":9090"
 )
 
 // maxJPEGQuality — верхняя граница качества JPEG в пакете image/jpeg.
@@ -117,6 +126,7 @@ type Config struct {
 	DB     DB
 	S3     S3
 	AMQP   AMQP
+	Otel   Otel
 	Image  Image
 	Worker Worker
 }
@@ -174,6 +184,16 @@ type AMQP struct {
 	Timeout time.Duration
 }
 
+// Otel — экспорт трейсов OpenTelemetry.
+type Otel struct {
+	// Endpoint — host:port коллектора без схемы; пустой выключает трейсинг.
+	Endpoint string
+	// Insecure разрешает соединение с коллектором без TLS.
+	Insecure bool
+	// SampleRatio — доля трейсов, попадающих в экспорт, от 0 до 1.
+	SampleRatio float64
+}
+
 // Image — лимиты и параметры обработки изображений.
 type Image struct {
 	MaxUploadBytes int64
@@ -193,6 +213,8 @@ type Worker struct {
 	StuckAfter        time.Duration
 	ReconcileBatch    int
 	DecodeConcurrency int
+	// MetricsAddr — адрес листенера /metrics воркера.
+	MetricsAddr string
 }
 
 // getenv — источник переменных окружения, второе значение — объявлена ли переменная.
@@ -228,6 +250,7 @@ func loadServer(env getenv) (*Config, error) {
 		cfg.DB.validate(),
 		cfg.S3.validate(),
 		cfg.AMQP.validate(),
+		cfg.Otel.validate(),
 		cfg.Image.validate(),
 	)
 	if err != nil {
@@ -248,6 +271,7 @@ func loadWorker(env getenv) (*Config, error) {
 		cfg.DB.validate(),
 		cfg.S3.validate(),
 		cfg.AMQP.validate(),
+		cfg.Otel.validate(),
 		cfg.Image.validate(),
 		cfg.Worker.validate(),
 	)
@@ -315,6 +339,11 @@ func load(env getenv) (*Config, error) {
 			Prefetch: r.integer(envAMQPPrefetch, defaultAMQPPrefetch),
 			Timeout:  r.duration(envAMQPTimeout, defaultAMQPTimeout),
 		},
+		Otel: Otel{
+			Endpoint:    r.str(envOtelEndpoint, ""),
+			Insecure:    r.boolean(envOtelInsecure, false),
+			SampleRatio: r.float(envOtelSampleRatio, defaultOtelSampleRatio),
+		},
 		Image: Image{
 			MaxUploadBytes: r.integer64(envImageMaxUploadBytes, defaultImageMaxUploadBytes),
 			MaxPixels:      r.integer64(envImageMaxPixels, defaultImageMaxPixels),
@@ -326,6 +355,7 @@ func load(env getenv) (*Config, error) {
 			StuckAfter:        r.duration(envWorkerStuckAfter, defaultWorkerStuckAfter),
 			ReconcileBatch:    r.integer(envWorkerReconcileBatch, defaultWorkerReconcileBatch),
 			DecodeConcurrency: r.integer(envWorkerDecodeConcurrency, defaultWorkerDecodeConcurrency),
+			MetricsAddr:       r.str(envWorkerMetricsAddr, defaultWorkerMetricsAddr),
 		},
 	}
 
@@ -394,6 +424,16 @@ func (c AMQP) validate() error {
 	)
 }
 
+// validate не требует Endpoint: пустое значение — выключенный трейсинг.
+func (c Otel) validate() error {
+	// ParseFloat принимает "NaN", а обе проверки диапазона для NaN ложны.
+	if math.IsNaN(c.SampleRatio) || c.SampleRatio < 0 || c.SampleRatio > 1 {
+		return fmt.Errorf("%s must be between 0 and 1", envOtelSampleRatio)
+	}
+
+	return nil
+}
+
 func (c Image) validate() error {
 	err := errors.Join(
 		positive(envImageMaxUploadBytes, c.MaxUploadBytes),
@@ -414,6 +454,7 @@ func (c Worker) validate() error {
 		positiveDuration(envWorkerStuckAfter, c.StuckAfter),
 		positive(envWorkerReconcileBatch, int64(c.ReconcileBatch)),
 		positive(envWorkerDecodeConcurrency, int64(c.DecodeConcurrency)),
+		required(envWorkerMetricsAddr, c.MetricsAddr),
 	)
 }
 
@@ -490,6 +531,22 @@ func (r *reader) integer64(key string, def int64) int64 {
 	}
 
 	return n
+}
+
+func (r *reader) float(key string, def float64) float64 {
+	v, ok := r.env(key)
+	if !ok {
+		return def
+	}
+
+	f, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		r.errs = append(r.errs, fmt.Errorf("%s: %w", key, err))
+
+		return def
+	}
+
+	return f
 }
 
 func (r *reader) boolean(key string, def bool) bool {

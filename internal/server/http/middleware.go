@@ -8,14 +8,40 @@ import (
 	"runtime/debug"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/kerpe-l/gophprofile/internal/logger"
+	"github.com/kerpe-l/gophprofile/internal/metrics"
 )
 
 // maxRequestIDLen — предел длины идентификатора запроса от клиента: значение
 // попадает в каждую запись лога.
 const maxRequestIDLen = 64
+
+// routeUnmatched — значение лейбла route для запросов мимо всех маршрутов:
+// сырой путь в лейбле дал бы неограниченную кардинальность.
+const routeUnmatched = "unmatched"
+
+// methodOther — значение для нестандартных HTTP-методов в лейбле метрики
+// и имени спана: метод приходит от клиента, и сырое значение дало бы
+// неограниченную кардинальность.
+const methodOther = "_OTHER"
+
+// normalizeMethod сводит методы вне стандартного набора к methodOther.
+func normalizeMethod(method string) string {
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut,
+		http.MethodPatch, http.MethodDelete, http.MethodConnect,
+		http.MethodOptions, http.MethodTrace:
+		return method
+	default:
+		return methodOther
+	}
+}
 
 // requestID связывает запрос с его идентификатором: кладёт в контекст,
 // откуда его подхватывает логгер, и возвращает клиенту тем же заголовком.
@@ -48,6 +74,52 @@ func validRequestID(id string) bool {
 	return true
 }
 
+// tracing открывает серверный спан на каждый запрос, кроме /health,
+// и после роутинга называет его route pattern'ом chi: сырой путь дал бы
+// отдельное имя спана на каждое значение {avatar_id}.
+func tracing(next http.Handler) http.Handler {
+	renaming := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(w, r)
+
+		if pattern := chi.RouteContext(r.Context()).RoutePattern(); pattern != "" {
+			span := trace.SpanFromContext(r.Context())
+			span.SetName(normalizeMethod(r.Method) + " " + pattern)
+			span.SetAttributes(semconv.HTTPRoute(pattern))
+		}
+	})
+
+	return otelhttp.NewHandler(renaming, "http.server",
+		otelhttp.WithFilter(func(r *http.Request) bool {
+			return r.URL.Path != healthPath && r.URL.Path != metricsPath
+		}))
+}
+
+// measuring считает RED-метрики запроса. Route pattern берётся после роутинга,
+// как и имя спана в tracing; health и scrape метрик не измеряются.
+func measuring(m *metrics.HTTP) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == healthPath || r.URL.Path == metricsPath {
+				next.ServeHTTP(w, r)
+
+				return
+			}
+
+			started := time.Now()
+			rec := &recorder{ResponseWriter: w, status: http.StatusOK}
+
+			next.ServeHTTP(rec, r)
+
+			route := chi.RouteContext(r.Context()).RoutePattern()
+			if route == "" {
+				route = routeUnmatched
+			}
+
+			m.Observe(normalizeMethod(r.Method), route, rec.status, time.Since(started))
+		})
+	}
+}
+
 // logging пишет одну запись на запрос — с кодом ответа и длительностью.
 func logging(log *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
@@ -57,7 +129,12 @@ func logging(log *slog.Logger) func(http.Handler) http.Handler {
 
 			next.ServeHTTP(rec, r)
 
+			// Периодический scrape метрик пишется на Debug.
 			level := slog.LevelInfo
+			if r.URL.Path == metricsPath {
+				level = slog.LevelDebug
+			}
+
 			if rec.status >= http.StatusInternalServerError {
 				level = slog.LevelError
 			}

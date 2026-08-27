@@ -5,11 +5,15 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/kerpe-l/gophprofile/internal/broker"
 	"github.com/kerpe-l/gophprofile/internal/domain"
+	"github.com/kerpe-l/gophprofile/internal/observability"
 )
 
 // UploadInput — загружаемое изображение вместе с тем, что о нём известно
@@ -34,14 +38,25 @@ type UploadInput struct {
 // изображение — domain.ErrImageTooBig, отказ хранилища переводит запись
 // в failed. Отказ публикации загрузку не проваливает: застрявшую запись
 // переопубликует reconciler.
-func (s *Service) Upload(ctx context.Context, in UploadInput) (domain.Avatar, error) {
+func (s *Service) Upload(ctx context.Context, in UploadInput) (_ domain.Avatar, err error) {
+	started := time.Now()
+
+	defer func() { s.metrics.ObserveUpload(err == nil, time.Since(started)) }()
+
+	ctx, span := s.tracer.Start(ctx, "service.upload",
+		trace.WithAttributes(attribute.String(attrUserID, in.UserID)))
+	defer span.End()
+
 	info, err := s.validator.Validate(in.File)
 	if err != nil {
-		return domain.Avatar{}, fmt.Errorf("validate upload of user %s: %w", in.UserID, err)
+		return domain.Avatar{}, observability.SpanError(span,
+			fmt.Errorf("validate upload of user %s: %w", in.UserID, err))
 	}
 
 	id := uuid.New()
 	key := domain.OriginalKey(id)
+
+	span.SetAttributes(attribute.String(attrAvatarID, id.String()))
 
 	avatar, err := s.repo.Create(ctx, domain.NewAvatar{
 		ID:        id,
@@ -54,7 +69,8 @@ func (s *Service) Upload(ctx context.Context, in UploadInput) (domain.Avatar, er
 		S3Key:     key,
 	})
 	if err != nil {
-		return domain.Avatar{}, fmt.Errorf("upload avatar of user %s: %w", in.UserID, err)
+		return domain.Avatar{}, observability.SpanError(span,
+			fmt.Errorf("upload avatar of user %s: %w", in.UserID, err))
 	}
 
 	ctx = context.WithoutCancel(ctx)
@@ -62,13 +78,13 @@ func (s *Service) Upload(ctx context.Context, in UploadInput) (domain.Avatar, er
 	if err := s.storage.Put(ctx, key, in.File, in.Size, info.MimeType); err != nil {
 		s.markFailed(ctx, id)
 
-		return domain.Avatar{}, fmt.Errorf("upload avatar %s: %w", id, err)
+		return domain.Avatar{}, observability.SpanError(span, fmt.Errorf("upload avatar %s: %w", id, err))
 	}
 
 	if err := s.repo.SetUploadStatus(ctx, id, domain.UploadStatusUploaded); err != nil {
 		s.markFailed(ctx, id)
 
-		return domain.Avatar{}, fmt.Errorf("upload avatar %s: %w", id, err)
+		return domain.Avatar{}, observability.SpanError(span, fmt.Errorf("upload avatar %s: %w", id, err))
 	}
 
 	avatar.UploadStatus = domain.UploadStatusUploaded

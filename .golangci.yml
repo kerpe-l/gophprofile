@@ -29,6 +29,7 @@ linters:
     - predeclared
     - revive
     - rowserrcheck
+    - spancheck
     - sqlclosecheck
     - testifylint
     - thelper
@@ -54,6 +55,13 @@ linters:
     revive:
       rules:
         - name: exported
+    spancheck:
+      checks:
+        - end
+        - record-error
+        - set-status
+      ignore-check-signatures:
+        - observability\.SpanError
     usetesting:
       context-background: true
       context-todo: true

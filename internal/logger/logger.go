@@ -1,12 +1,14 @@
 // Package logger собирает slog-логгер приложения и связывает его с контекстом
-// запроса: идентификатор запроса кладётся в контекст один раз и дальше сам
-// попадает в каждую запись, сделанную с этим контекстом.
+// запроса: идентификатор запроса и координаты активного спана попадают в
+// каждую запись, сделанную с этим контекстом.
 package logger
 
 import (
 	"context"
 	"io"
 	"log/slog"
+
+	"go.opentelemetry.io/otel/trace"
 )
 
 // Format — формат вывода логов.
@@ -19,8 +21,12 @@ const (
 	FormatText Format = "text"
 )
 
-// requestIDAttr — имя поля с идентификатором запроса в записи лога.
-const requestIDAttr = "request_id"
+// Имена полей записи лога, заполняемых из контекста.
+const (
+	requestIDAttr = "request_id"
+	traceIDAttr   = "trace_id"
+	spanIDAttr    = "span_id"
+)
 
 // New собирает логгер с указанным уровнем и форматом вывода. Записи, сделанные
 // с контекстом (методы *Context), получают поле request_id, если оно положено
@@ -63,10 +69,19 @@ type contextHandler struct {
 	slog.Handler
 }
 
-// Handle добавляет к записи request_id из контекста, если он там есть.
+// Handle добавляет к записи request_id и координаты активного спана из
+// контекста. trace_id пишется и для несэмплированного спана: корреляция
+// логов между сервисами нужна независимо от того, экспортирован ли трейс.
 func (h contextHandler) Handle(ctx context.Context, r slog.Record) error {
 	if id := RequestID(ctx); id != "" {
 		r.AddAttrs(slog.String(requestIDAttr, id))
+	}
+
+	if sc := trace.SpanContextFromContext(ctx); sc.IsValid() {
+		r.AddAttrs(
+			slog.String(traceIDAttr, sc.TraceID().String()),
+			slog.String(spanIDAttr, sc.SpanID().String()),
+		)
 	}
 
 	return h.Handler.Handle(ctx, r)

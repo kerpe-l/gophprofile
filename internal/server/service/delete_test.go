@@ -187,3 +187,36 @@ func TestDeleteSurvivesCanceledRequest(t *testing.T) {
 	assert.Len(t, d.publisher.events, 1)
 	assert.NoError(t, d.publisher.ctxErr, "публикация идёт на неотменяемом контексте")
 }
+
+// Чужой и несуществующий аватары — отказы и для метрик тоже.
+func TestDeleteReportsMetrics(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		prepare func(d *deps)
+		want    []bool
+	}{
+		{name: "success", prepare: func(*deps) {}, want: []bool{true}},
+		{name: "foreign avatar", prepare: func(d *deps) {
+			d.repo.avatar.UserID = "someone-else"
+		}, want: []bool{false}},
+		{name: "not found", prepare: func(d *deps) {
+			d.repo.getErr = domain.ErrNotFound
+		}, want: []bool{false}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			d := newDeps()
+			d.repo.avatar = storedAvatar()
+			tc.prepare(d)
+
+			_ = newService(t, d).Delete(t.Context(), d.repo.avatar.ID, testUserID)
+
+			assert.Equal(t, tc.want, d.metrics.deleteOutcomes())
+		})
+	}
+}
