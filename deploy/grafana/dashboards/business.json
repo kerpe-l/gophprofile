@@ -282,7 +282,38 @@
         "defaults": {
           "unit": "s"
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "/error/"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "/success/"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "green"
+                }
+              }
+            ]
+          }
+        ]
       },
       "targets": [
         {
@@ -291,8 +322,8 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(avatars_processing_duration_seconds_bucket[5m])))",
-          "legendFormat": "p95"
+          "expr": "histogram_quantile(0.95, sum by (status, le) (rate(avatars_processing_duration_seconds_bucket[5m])))",
+          "legendFormat": "{{status}}"
         }
       ]
     },

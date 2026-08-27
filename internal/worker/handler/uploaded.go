@@ -17,6 +17,7 @@ import (
 	"github.com/kerpe-l/gophprofile/internal/broker"
 	"github.com/kerpe-l/gophprofile/internal/domain"
 	"github.com/kerpe-l/gophprofile/internal/imageproc"
+	"github.com/kerpe-l/gophprofile/internal/observability"
 )
 
 // uploaded создаёт миниатюры загруженного оригинала.
@@ -197,10 +198,13 @@ func (h *Handler) render(ctx context.Context, avatar domain.Avatar) (map[domain.
 		return nil, err
 	}
 
+	_, span := h.tracer.Start(ctx, "render thumbnails")
+	defer span.End()
+
 	thumbnails, err := h.processor.Thumbnails(bytes.NewReader(original), domain.ThumbnailSizes())
 	if err != nil {
 		// Битый JPEG повтором не чинится.
-		return nil, nonRetryable(fmt.Errorf("make thumbnails of avatar %s: %w", avatar.ID, err))
+		return nil, observability.SpanError(span, nonRetryable(fmt.Errorf("make thumbnails of avatar %s: %w", avatar.ID, err)))
 	}
 
 	return thumbnails, nil

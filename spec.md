@@ -348,7 +348,7 @@ worker'а и reconciler. Контекст между server и worker перед
 | `avatars_uploads_total` | counter | `status` |
 | `avatars_upload_duration_seconds` | histogram | `status` |
 | `avatars_processing_total` | counter | `status` |
-| `avatars_processing_duration_seconds` | histogram | — |
+| `avatars_processing_duration_seconds` | histogram | `status` |
 | `avatars_deletes_total` | counter | `status` |
 | `avatars_storage_bytes` | gauge | — |
 

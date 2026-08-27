@@ -23,12 +23,10 @@ func (c headerCarrier) Get(key string) string {
 	return value
 }
 
-// Set записывает заголовок.
 func (c headerCarrier) Set(key, value string) {
 	c[key] = value
 }
 
-// Keys перечисляет имена заголовков.
 func (c headerCarrier) Keys() []string {
 	keys := make([]string, 0, len(c))
 	for key := range c {
