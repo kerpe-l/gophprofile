@@ -498,3 +498,23 @@ func (s *RepositorySuite) TestCanceledContext() {
 		s.Require().ErrorIs(err, context.Canceled)
 	}
 }
+
+func (s *RepositorySuite) TestStorageBytes() {
+	total, err := s.repo.StorageBytes(s.T().Context())
+	s.Require().NoError(err)
+	s.Zero(total, "empty table must sum to zero")
+
+	first := s.createAvatar(userAlice)
+	s.createAvatar(userBob)
+
+	total, err = s.repo.StorageBytes(s.T().Context())
+	s.Require().NoError(err)
+	s.Equal(int64(2048), total)
+
+	// Удалённая запись из суммы выпадает.
+	s.Require().NoError(s.repo.SoftDelete(s.T().Context(), first.ID))
+
+	total, err = s.repo.StorageBytes(s.T().Context())
+	s.Require().NoError(err)
+	s.Equal(int64(1024), total)
+}

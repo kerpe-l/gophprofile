@@ -6,33 +6,58 @@ import (
 	"log/slog"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/kerpe-l/gophprofile/internal/broker"
 	"github.com/kerpe-l/gophprofile/internal/domain"
+	"github.com/kerpe-l/gophprofile/internal/observability"
 )
 
 // Delete удаляет аватар по идентификатору от имени requesterID.
 //
 // Чужой аватар — domain.ErrForbidden, несуществующий или уже удалённый —
 // domain.ErrNotFound.
-func (s *Service) Delete(ctx context.Context, id uuid.UUID, requesterID string) error {
+func (s *Service) Delete(ctx context.Context, id uuid.UUID, requesterID string) (err error) {
+	defer func() { s.metrics.IncDelete(err == nil) }()
+
+	ctx, span := s.tracer.Start(ctx, "service.delete",
+		trace.WithAttributes(attribute.String(attrAvatarID, id.String())))
+	defer span.End()
+
 	avatar, err := s.repo.Get(ctx, id)
 	if err != nil {
-		return fmt.Errorf("delete avatar %s: %w", id, err)
+		return observability.SpanError(span, fmt.Errorf("delete avatar %s: %w", id, err))
 	}
 
-	return s.remove(ctx, avatar, requesterID)
+	if err := s.remove(ctx, avatar, requesterID); err != nil {
+		return observability.SpanError(span, err)
+	}
+
+	return nil
 }
 
 // DeleteCurrent удаляет актуальный аватар пользователя — последний созданный
 // среди живых. Остальные аватары того же пользователя не затрагиваются.
-func (s *Service) DeleteCurrent(ctx context.Context, userID, requesterID string) error {
+func (s *Service) DeleteCurrent(ctx context.Context, userID, requesterID string) (err error) {
+	defer func() { s.metrics.IncDelete(err == nil) }()
+
+	ctx, span := s.tracer.Start(ctx, "service.delete_current",
+		trace.WithAttributes(attribute.String(attrUserID, userID)))
+	defer span.End()
+
 	avatar, err := s.repo.GetCurrent(ctx, userID)
 	if err != nil {
-		return fmt.Errorf("delete current avatar of user %s: %w", userID, err)
+		return observability.SpanError(span, fmt.Errorf("delete current avatar of user %s: %w", userID, err))
 	}
 
-	return s.remove(ctx, avatar, requesterID)
+	span.SetAttributes(attribute.String(attrAvatarID, avatar.ID.String()))
+
+	if err := s.remove(ctx, avatar, requesterID); err != nil {
+		return observability.SpanError(span, err)
+	}
+
+	return nil
 }
 
 // remove сверяет владельца, помечает запись удалённой и заказывает воркеру

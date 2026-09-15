@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -220,6 +221,7 @@ type deps struct {
 	repo      *fakeRepo
 	storage   *fakeStorage
 	processor *fakeProcessor
+	metrics   *fakeMetrics
 	log       *callLog
 }
 
@@ -233,14 +235,35 @@ func newDeps(avatar domain.Avatar) *deps {
 			domain.ThumbnailSmall:  []byte("small thumbnail"),
 			domain.ThumbnailMedium: []byte("medium thumbnail"),
 		}},
-		log: log,
+		metrics: &fakeMetrics{},
+		log:     log,
 	}
+}
+
+// fakeMetrics копит исходы, переданные в метрики.
+type fakeMetrics struct {
+	mu       sync.Mutex
+	outcomes []bool
+}
+
+func (m *fakeMetrics) ObserveProcessing(success bool, _ time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.outcomes = append(m.outcomes, success)
+}
+
+func (m *fakeMetrics) processed() []bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	return append([]bool(nil), m.outcomes...)
 }
 
 func newHandler(t *testing.T, d *deps) *handler.Handler {
 	t.Helper()
 
-	return handler.New(d.repo, d.storage, d.processor, maxOriginalBytes, 2, slog.New(slog.DiscardHandler))
+	return handler.New(d.repo, d.storage, d.processor, maxOriginalBytes, 2, d.metrics, slog.New(slog.DiscardHandler))
 }
 
 // newAvatar — запись, готовая к обработке: оригинал загружен, миниатюр нет.

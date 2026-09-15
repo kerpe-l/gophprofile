@@ -79,6 +79,25 @@ curl -o avatar.jpg 'http://localhost:8080/api/v1/users/alice/avatar?size=100x100
 Страницы собраны на `html/template`, шаблоны и статика встроены в бинарник,
 JS-сборки нет. Владелец задаётся полем формы.
 
+## Наблюдаемость
+
+Три сигнала и их маршруты: трейсы — OpenTelemetry → Jaeger, метрики —
+`/metrics` server и worker → Prometheus, логи — JSON в stdout → Alloy → Loki.
+Grafana объединяет все три источника: из записи лога по `trace_id`
+открывается трейс. Alertmanager получает алерты Prometheus (доля ошибок,
+p95 задержки, рост DLQ, недоступность таргетов).
+
+После `make up`:
+
+- Grafana (дашборды, Explore) — http://localhost:3000
+- Prometheus — http://localhost:9090
+- Alertmanager — http://localhost:9093
+- Jaeger — http://localhost:16686
+
+Экспорт трейсов включается переменной `OTEL_EXPORTER_OTLP_ENDPOINT`; пустое
+значение — трейсинг выключен, сервис работает без стека наблюдаемости.
+Конфиги стека — в каталоге [deploy](deploy/).
+
 ## Разработка
 
 ```sh

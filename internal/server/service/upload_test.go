@@ -218,3 +218,36 @@ func TestUploadFinishesAfterClientLeaves(t *testing.T) {
 	assert.Equal(t, domain.UploadStatusUploaded, avatar.UploadStatus)
 	assert.Len(t, d.publisher.events, 1)
 }
+
+// Ошибка валидации для метрик — такой же отказ, как и отказ хранилища:
+// лейбл метрики различает только итог операции.
+func TestUploadReportsMetrics(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		prepare func(d *deps)
+		want    []bool
+	}{
+		{name: "success", prepare: func(*deps) {}, want: []bool{true}},
+		{name: "validation fails", prepare: func(d *deps) {
+			d.validator.err = domain.ErrUnsupportedFormat
+		}, want: []bool{false}},
+		{name: "storage fails", prepare: func(d *deps) {
+			d.storage.putErr = errStorage
+		}, want: []bool{false}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			d := newDeps()
+			tc.prepare(d)
+
+			_, _ = newService(t, d).Upload(t.Context(), uploadInput())
+
+			assert.Equal(t, tc.want, d.metrics.uploadOutcomes())
+		})
+	}
+}

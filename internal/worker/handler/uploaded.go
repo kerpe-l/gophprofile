@@ -8,12 +8,16 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/kerpe-l/gophprofile/internal/broker"
 	"github.com/kerpe-l/gophprofile/internal/domain"
 	"github.com/kerpe-l/gophprofile/internal/imageproc"
+	"github.com/kerpe-l/gophprofile/internal/observability"
 )
 
 // uploaded создаёт миниатюры загруженного оригинала.
@@ -22,29 +26,44 @@ import (
 // миниатюры в хранилище → ключи и completed одним запросом. Ключ появляется
 // в базе только после самого объекта, иначе раздача сошлётся на пустоту.
 func (h *Handler) uploaded(ctx context.Context, msg broker.Message) error {
+	started := time.Now()
+
 	var event broker.AvatarUploadEvent
 	if err := json.Unmarshal(msg.Body, &event); err != nil {
+		h.metrics.ObserveProcessing(false, time.Since(started))
+
 		return nonRetryable(fmt.Errorf("decode upload event %s: %w", msg.MessageID, err))
 	}
 
 	id, err := uuid.Parse(event.AvatarID)
 	if err != nil {
+		h.metrics.ObserveProcessing(false, time.Since(started))
+
 		return nonRetryable(fmt.Errorf("parse avatar id %q of message %s: %w", event.AvatarID, msg.MessageID, err))
 	}
 
+	trace.SpanFromContext(ctx).SetAttributes(attribute.String(attrAvatarID, id.String()))
+
 	avatar, ok, err := h.start(ctx, id)
 	if err != nil {
+		h.metrics.ObserveProcessing(false, time.Since(started))
+
 		return h.failure(ctx, id, msg, err)
 	}
 
+	// Идемпотентный пропуск попыткой обработки не считается и в метрики
+	// не попадает.
 	if !ok {
 		return nil
 	}
 
 	if err := h.process(ctx, avatar); err != nil {
+		h.metrics.ObserveProcessing(false, time.Since(started))
+
 		return h.failure(ctx, id, msg, err)
 	}
 
+	h.metrics.ObserveProcessing(true, time.Since(started))
 	h.log.InfoContext(ctx, "avatar processed", slog.String("avatar_id", id.String()))
 
 	return nil
@@ -179,10 +198,13 @@ func (h *Handler) render(ctx context.Context, avatar domain.Avatar) (map[domain.
 		return nil, err
 	}
 
+	_, span := h.tracer.Start(ctx, "render thumbnails")
+	defer span.End()
+
 	thumbnails, err := h.processor.Thumbnails(bytes.NewReader(original), domain.ThumbnailSizes())
 	if err != nil {
 		// Битый JPEG повтором не чинится.
-		return nil, nonRetryable(fmt.Errorf("make thumbnails of avatar %s: %w", avatar.ID, err))
+		return nil, observability.SpanError(span, nonRetryable(fmt.Errorf("make thumbnails of avatar %s: %w", avatar.ID, err)))
 	}
 
 	return thumbnails, nil

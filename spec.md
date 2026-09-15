@@ -15,6 +15,8 @@
 | Брокер | RabbitMQ, клиент `rabbitmq/amqp091-go` |
 | Обработка изображений | `disintegration/imaging`, декодер WebP `golang.org/x/image/webp` |
 | Миграции | `pressly/goose/v3` + `embed.FS` |
+| Наблюдаемость | OpenTelemetry (трейсы), `prometheus/client_golang` (метрики) |
+| Стек мониторинга | Prometheus, Grafana, Jaeger, Loki + Alloy, Alertmanager |
 | Тесты | `stretchr/testify` (+ `suite` для интеграционных), `testcontainers-go` |
 | Деплой | Docker Compose |
 
@@ -32,6 +34,7 @@
 - **PostgreSQL** — метаданные аватарок.
 - **MinIO** — оригиналы и миниатюры.
 - **RabbitMQ** — очередь событий обработки/удаления.
+- **Стек наблюдаемости** — Jaeger, Prometheus, Grafana, Loki + Alloy, Alertmanager ([§8](#8-наблюдаемость)).
 
 ### 3.1 Структура репозитория
 
@@ -43,7 +46,8 @@ cmd/
 internal/
   domain/                       # модели, статусы, доменные ошибки; без импортов инфраструктуры
   config/                       # одна структура конфига, LoadServer/LoadWorker
-  logger/                       # slog, request_id из контекста
+  logger/                       # slog, request_id и trace_id из контекста
+  observability/                # каркас трейсинга OpenTelemetry
   buildinfo/                    # версия и дата сборки (ldflags)
   imageproc/                    # magic bytes, лимит пикселей, ресайз миниатюр
     testdata/                   # фикстуры: валидные, битые, «бомба», анимированный webp
@@ -60,6 +64,7 @@ internal/
     handler/                    # обработчики avatar.uploaded / avatar.deleted
     reconciler/                 # добор зависших загрузок (§6.3)
 migrations/                     # SQL-миграции
+deploy/                         # конфиги стека наблюдаемости
 build/                          # Dockerfile.server, Dockerfile.worker, Dockerfile.migrator
 docker-compose.yml
 ```
@@ -309,3 +314,55 @@ INSERT (upload_status='uploading') → PUT в S3 → UPDATE 'uploaded' → publi
 - Docker Compose поднимает всё окружение одной командой.
 - Секреты — только через env.
 - Образы собираются многостадийно, с `CGO_ENABLED=0`, и запускаются не от root.
+
+## 8. Наблюдаемость
+
+Три сигнала и их маршруты:
+
+- **Трейсы** — OpenTelemetry SDK → OTLP gRPC → Jaeger.
+- **Метрики** — `prometheus/client_golang`: `/metrics` у server, отдельный листенер у worker → Prometheus.
+- **Логи** — JSON в stdout → Alloy → Loki.
+
+Grafana объединяет все три источника; из записи лога по `trace_id` открывается трейс.
+
+### 8.1 Трейсинг
+
+Инструментируются HTTP-запросы (спан именуется route pattern'ом; `/health` не трейсится),
+сервисный слой, запросы БД, операции S3, публикация и потребление событий, обработчики
+worker'а и reconciler. Контекст между server и worker передаётся в заголовке `traceparent`
+сообщения AMQP (W3C Trace Context).
+
+Экспорт включается переменной `OTEL_EXPORTER_OTLP_ENDPOINT` (host:port без схемы);
+пустое значение — трейсинг выключен, инструментация работает как noop.
+Соединение с коллектором — TLS; `OTEL_EXPORTER_OTLP_INSECURE=true` переключает
+на plaintext (локальный стек). Доля
+сэмплирования — `OTEL_TRACES_SAMPLE_RATIO` (по умолчанию 1.0), решение родительского
+спана уважается. `trace_id` попадает в логи и у несэмплированных запросов.
+
+### 8.2 Метрики
+
+| Метрика | Тип | Лейблы |
+|---|---|---|
+| `http_requests_total` | counter | `method`, `route`, `status` |
+| `http_request_duration_seconds` | histogram | `method`, `route` |
+| `avatars_uploads_total` | counter | `status` |
+| `avatars_upload_duration_seconds` | histogram | `status` |
+| `avatars_processing_total` | counter | `status` |
+| `avatars_processing_duration_seconds` | histogram | `status` |
+| `avatars_deletes_total` | counter | `status` |
+| `avatars_storage_bytes` | gauge | — |
+
+`user_id` в лейблах не используется, разрез по пользователю остаётся в логах и трейсах. Дополнительно экспортируются стандартные Go/process-коллекторы и статистика пула pgx; глубину очередей отдаёт prometheus-плагин RabbitMQ, метрики хранилища — сам MinIO.
+
+Server отдаёт `/metrics` на основном порту; `/health` и сам `/metrics` в RED-метрики не входят. Worker слушает `/metrics` на отдельном адресе — `WORKER_METRICS_ADDR`, по умолчанию `:9090`. `avatars_storage_bytes` считается суммой `size_bytes` живых записей в БД на каждый scrape.
+
+### 8.3 Логи
+
+Формат — структурный slog, JSON в контейнерах. Каждая запись с активным спаном
+содержит `trace_id` и `span_id`. Alloy собирает логи контейнеров через Docker discovery
+и пишет в Loki.
+
+### 8.4 Алертинг
+
+Prometheus Alertmanager. Правила: доля ошибок HTTP, p95 длительности запроса,
+рост DLQ, недоступность таргетов.

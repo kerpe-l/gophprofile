@@ -12,9 +12,17 @@ import (
 	"log/slog"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/kerpe-l/gophprofile/internal/broker"
 	"github.com/kerpe-l/gophprofile/internal/domain"
+	"github.com/kerpe-l/gophprofile/internal/observability"
 )
+
+// tracerName — имя инструментации пакета в трейсах.
+const tracerName = "github.com/kerpe-l/gophprofile/internal/worker/reconciler"
 
 // Repository — метаданные аватаров.
 type Repository interface {
@@ -46,12 +54,13 @@ type Reconciler struct {
 	repo      Repository
 	publisher Publisher
 	cfg       Config
+	tracer    trace.Tracer
 	log       *slog.Logger
 }
 
 // New собирает добор из его зависимостей.
 func New(repo Repository, publisher Publisher, cfg Config, log *slog.Logger) *Reconciler {
-	return &Reconciler{repo: repo, publisher: publisher, cfg: cfg, log: log}
+	return &Reconciler{repo: repo, publisher: publisher, cfg: cfg, tracer: otel.Tracer(tracerName), log: log}
 }
 
 // Run выполняет проходы по тикеру, пока не отменят контекст.
@@ -73,24 +82,32 @@ func (r *Reconciler) Run(ctx context.Context) {
 
 // reconcile публикует события для зависших записей одного прохода. Перебор
 // прекращается на первой ошибке — остальное подберёт следующий тик.
+//
+// Спан прохода корневой: входящего контекста трейса у тикера нет. Через
+// публикацию он связывает обработку переопубликованных событий с проходом.
 func (r *Reconciler) reconcile(ctx context.Context) error {
+	ctx, span := r.tracer.Start(ctx, "reconcile stuck uploads")
+	defer span.End()
+
 	before := time.Now().Add(-r.cfg.StuckAfter)
 
 	republished := 0
 
 	for avatar, err := range r.repo.SelectStuck(ctx, before, r.cfg.Batch) {
 		if err != nil {
-			return fmt.Errorf("select stuck uploads: %w", err)
+			return observability.SpanError(span, fmt.Errorf("select stuck uploads: %w", err))
 		}
 
 		// Идентификатор сообщения каждый раз новый: дедупликации по нему нет.
 		event := broker.NewUploadEvent(avatar.ID, avatar.UserID, avatar.S3Key)
 		if err := r.publisher.Publish(ctx, event); err != nil {
-			return fmt.Errorf("republish upload event of avatar %s: %w", avatar.ID, err)
+			return observability.SpanError(span, fmt.Errorf("republish upload event of avatar %s: %w", avatar.ID, err))
 		}
 
 		republished++
 	}
+
+	span.SetAttributes(attribute.Int("republished", republished))
 
 	if republished > 0 {
 		r.log.InfoContext(ctx, "stuck uploads republished", slog.Int("count", republished))

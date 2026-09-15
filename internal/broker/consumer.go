@@ -9,6 +9,11 @@ import (
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/kerpe-l/gophprofile/internal/logger"
 )
@@ -43,9 +48,10 @@ type Handler func(ctx context.Context, msg Message) error
 // Consumer читает основную очередь и раскладывает сообщения по лестнице
 // повторов и очереди мёртвых.
 type Consumer struct {
-	ch  *amqp.Channel
-	pub *Publisher
-	log *slog.Logger
+	ch     *amqp.Channel
+	pub    *Publisher
+	log    *slog.Logger
+	tracer trace.Tracer
 	// levels — лестница повторов от минимальной задержки к максимальной.
 	levels []retryLevel
 	// prefetch — сколько сообщений брокер отдаёт не дожидаясь подтверждений;
@@ -68,6 +74,7 @@ func (c *Conn) Consumer(log *slog.Logger) (*Consumer, error) {
 		// с подтверждениями публикаций подтверждения доставок не ждут.
 		pub:      c.Publisher(),
 		log:      log,
+		tracer:   otel.Tracer(tracerName),
 		levels:   c.levels,
 		prefetch: c.prefetch,
 		timeout:  c.processTimeout,
@@ -168,15 +175,34 @@ func (c *Consumer) process(ctx context.Context, handler Handler, delivery amqp.D
 		ctx = logger.WithRequestID(ctx, delivery.CorrelationId)
 	}
 
+	// Контекст трейса приезжает в заголовках сообщения: consumer-спан
+	// продолжает трейс запроса, породившего событие.
+	ctx = otel.GetTextMapPropagator().Extract(ctx, headerCarrier(delivery.Headers))
+
+	ctx, span := c.tracer.Start(ctx, "process "+msg.Type,
+		trace.WithSpanKind(trace.SpanKindConsumer),
+		trace.WithAttributes(
+			semconv.MessagingSystemRabbitMQ,
+			semconv.MessagingDestinationName(queueProcess),
+			semconv.MessagingMessageID(msg.MessageID),
+			attribute.Int("attempt", attempt),
+		))
+	defer span.End()
+
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
 	err := handler(ctx, msg)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
 
 	switch {
 	case err == nil:
 		c.ack(ctx, delivery)
 	case errors.Is(err, ErrNonRetryable):
+		span.SetAttributes(attribute.String("outcome", "dropped"))
 		c.log.ErrorContext(ctx, "message dropped",
 			slog.Any("error", err),
 			slog.String("type", msg.Type),
@@ -184,6 +210,7 @@ func (c *Consumer) process(ctx context.Context, handler Handler, delivery amqp.D
 		)
 		c.ack(ctx, delivery)
 	case msg.Final:
+		span.SetAttributes(attribute.String("outcome", "dead_letter"))
 		c.log.ErrorContext(ctx, "message moved to dead letter queue",
 			slog.Any("error", err),
 			slog.String("type", msg.Type),
@@ -192,6 +219,8 @@ func (c *Consumer) process(ctx context.Context, handler Handler, delivery amqp.D
 		)
 		c.reroute(ctx, exchangeDead, routingKeyDead, delivery, attempt)
 	default:
+		span.SetAttributes(attribute.String("outcome", "retry"))
+
 		level := retryLevelFor(c.levels, attempt)
 		c.log.WarnContext(ctx, "message scheduled for retry",
 			slog.Any("error", err),
@@ -256,8 +285,15 @@ func (c *Consumer) forward(ctx context.Context, exchange, key string, delivery a
 	})
 }
 
+// ack подтверждает сообщение. Неподтверждённое сообщение брокер доставит
+// повторно, поэтому отказ Ack записывается и в спан обработки.
 func (c *Consumer) ack(ctx context.Context, delivery amqp.Delivery) {
 	if err := delivery.Ack(false); err != nil {
+		span := trace.SpanFromContext(ctx)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "acknowledge message: "+err.Error())
+		span.SetAttributes(attribute.String("outcome", "ack_failed"))
+
 		c.log.ErrorContext(ctx, "acknowledge message",
 			slog.Any("error", err),
 			slog.String("message_id", delivery.MessageId),

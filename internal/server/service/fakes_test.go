@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -253,6 +254,7 @@ type deps struct {
 	storage   *fakeStorage
 	publisher *fakePublisher
 	validator *fakeValidator
+	metrics   *fakeMetrics
 	log       *callLog
 }
 
@@ -267,8 +269,44 @@ func newDeps() *deps {
 		},
 		publisher: &fakePublisher{log: log},
 		validator: &fakeValidator{log: log, info: imageproc.Info{MimeType: "image/png", Width: 800, Height: 600}},
+		metrics:   &fakeMetrics{},
 		log:       log,
 	}
+}
+
+// fakeMetrics копит исходы, переданные в метрики.
+type fakeMetrics struct {
+	mu      sync.Mutex
+	uploads []bool
+	deletes []bool
+}
+
+func (m *fakeMetrics) ObserveUpload(success bool, _ time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.uploads = append(m.uploads, success)
+}
+
+func (m *fakeMetrics) IncDelete(success bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.deletes = append(m.deletes, success)
+}
+
+func (m *fakeMetrics) uploadOutcomes() []bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	return append([]bool(nil), m.uploads...)
+}
+
+func (m *fakeMetrics) deleteOutcomes() []bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	return append([]bool(nil), m.deletes...)
 }
 
 // newService собирает сервис на фейках; заглушка настоящая — она не делает I/O.
@@ -277,6 +315,6 @@ func newService(t *testing.T, d *deps) *service.Service {
 
 	return service.New(
 		d.repo, d.storage, d.publisher, d.validator,
-		placeholder.New(), slog.New(slog.DiscardHandler),
+		placeholder.New(), d.metrics, slog.New(slog.DiscardHandler),
 	)
 }

@@ -1,0 +1,30 @@
+# Датасорсы с фиксированными uid: на них ссылаются derived fields и дашборды.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+
+  - name: Loki
+    uid: loki
+    type: loki
+    access: proxy
+    url: http://loki:3100
+    jsonData:
+      derivedFields:
+        # Из JSON-записи лога по trace_id открывается трейс в Jaeger.
+        # $$ экранирует интерполяцию переменных окружения провижининга.
+        - name: trace_id
+          matcherRegex: '"trace_id":"([0-9a-f]+)"'
+          datasourceUid: jaeger
+          url: "$${__value.raw}"
+
+  - name: Jaeger
+    uid: jaeger
+    type: jaeger
+    access: proxy
+    url: http://jaeger:16686

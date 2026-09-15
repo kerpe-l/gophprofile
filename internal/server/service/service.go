@@ -11,13 +11,25 @@ import (
 	"io"
 	"iter"
 	"log/slog"
+	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/kerpe-l/gophprofile/internal/broker"
 	"github.com/kerpe-l/gophprofile/internal/domain"
 	"github.com/kerpe-l/gophprofile/internal/imageproc"
 	"github.com/kerpe-l/gophprofile/internal/placeholder"
+)
+
+// tracerName — имя инструментации пакета в трейсах.
+const tracerName = "github.com/kerpe-l/gophprofile/internal/server/service"
+
+// Имена атрибутов спанов.
+const (
+	attrAvatarID = "avatar_id"
+	attrUserID   = "user_id"
 )
 
 // Repository — метаданные аватаров.
@@ -54,6 +66,14 @@ type Publisher interface {
 	Publish(ctx context.Context, event broker.Event) error
 }
 
+// Metrics — бизнес-метрики сценариев.
+type Metrics interface {
+	// ObserveUpload учитывает одну попытку загрузки.
+	ObserveUpload(success bool, took time.Duration)
+	// IncDelete учитывает одну попытку удаления.
+	IncDelete(success bool)
+}
+
 // Validator — проверка загружаемого изображения.
 type Validator interface {
 	// Validate проверяет изображение и возвращает его тип и размеры,
@@ -68,6 +88,8 @@ type Service struct {
 	publisher   Publisher
 	validator   Validator
 	placeholder *placeholder.Placeholder
+	metrics     Metrics
+	tracer      trace.Tracer
 	log         *slog.Logger
 }
 
@@ -78,6 +100,7 @@ func New(
 	publisher Publisher,
 	validator Validator,
 	ph *placeholder.Placeholder,
+	metrics Metrics,
 	log *slog.Logger,
 ) *Service {
 	return &Service{
@@ -86,6 +109,8 @@ func New(
 		publisher:   publisher,
 		validator:   validator,
 		placeholder: ph,
+		metrics:     metrics,
+		tracer:      otel.Tracer(tracerName),
 		log:         log,
 	}
 }
