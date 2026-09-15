@@ -161,10 +161,14 @@ func run() error {
 	return nil
 }
 
-// metricsServer — листенер, отдающий воркеру только /metrics.
+// metricsServer — листенер воркера: /metrics и liveness-проба /livez.
 func metricsServer(addr string, reg *prometheus.Registry) *http.Server {
 	mux := http.NewServeMux()
 	mux.Handle("GET /metrics", metrics.Handler(reg))
+	// Зависимости не проверяются: их отказ рестарт процесса не чинит.
+	mux.HandleFunc("GET /livez", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
 
 	return &http.Server{
 		Addr:              addr,

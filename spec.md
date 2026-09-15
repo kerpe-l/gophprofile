@@ -18,7 +18,7 @@
 | Наблюдаемость | OpenTelemetry (трейсы), `prometheus/client_golang` (метрики) |
 | Стек мониторинга | Prometheus, Grafana, Jaeger, Loki + Alloy, Alertmanager |
 | Тесты | `stretchr/testify` (+ `suite` для интеграционных), `testcontainers-go` |
-| Деплой | Docker Compose |
+| Деплой | Docker Compose (локально), Kubernetes + Helm ([§9](#9-деплой-в-kubernetes)) |
 
 Три выбора требуют пояснения:
 
@@ -64,7 +64,9 @@ internal/
     handler/                    # обработчики avatar.uploaded / avatar.deleted
     reconciler/                 # добор зависших загрузок (§6.3)
 migrations/                     # SQL-миграции
+api/                            # OpenAPI-спецификация REST API
 deploy/                         # конфиги стека наблюдаемости
+  charts/gophprofile/           # Helm Chart (§9)
 build/                          # Dockerfile.server, Dockerfile.worker, Dockerfile.migrator
 docker-compose.yml
 ```
@@ -183,6 +185,15 @@ GET /health
 ```
 
 `degraded` + 503, если недоступен хотя бы один компонент. Каждая проверка — со своим таймаутом (2s), иначе `/health` подвисает вместе с проверяемой зависимостью и перестаёт быть индикатором.
+
+```
+GET /livez
+200 → пустое тело
+```
+
+`/livez` отвечает 200, пока процесс обслуживает HTTP; зависимости не проверяет. Это liveness-проба Kubernetes ([§9.3](#93-пробы-и-завершение)); `/health` остаётся readiness. Worker отдаёт `/livez` на metrics-листенере.
+
+Служебные пути (`/health`, `/livez`, `/metrics`) не трейсятся, в RED-метрики не входят и логируются на Debug.
 
 ### 4.6 Веб-интерфейс
 
@@ -354,7 +365,7 @@ worker'а и reconciler. Контекст между server и worker перед
 
 `user_id` в лейблах не используется, разрез по пользователю остаётся в логах и трейсах. Дополнительно экспортируются стандартные Go/process-коллекторы и статистика пула pgx; глубину очередей отдаёт prometheus-плагин RabbitMQ, метрики хранилища — сам MinIO.
 
-Server отдаёт `/metrics` на основном порту; `/health` и сам `/metrics` в RED-метрики не входят. Worker слушает `/metrics` на отдельном адресе — `WORKER_METRICS_ADDR`, по умолчанию `:9090`. `avatars_storage_bytes` считается суммой `size_bytes` живых записей в БД на каждый scrape.
+Server отдаёт `/metrics` на основном порту; служебные пути ([§4.5](#45-служебные)) в RED-метрики не входят. Worker слушает `/metrics` на отдельном адресе — `WORKER_METRICS_ADDR`, по умолчанию `:9090`. `avatars_storage_bytes` считается суммой `size_bytes` живых записей в БД на каждый scrape.
 
 ### 8.3 Логи
 
@@ -366,3 +377,85 @@ Server отдаёт `/metrics` на основном порту; `/health` и с
 
 Prometheus Alertmanager. Правила: доля ошибок HTTP, p95 длительности запроса,
 рост DLQ, недоступность таргетов.
+
+## 9. Деплой в Kubernetes
+
+Целевое окружение — Kubernetes (локальная разработка — Rancher Desktop), конфигурация в Helm Chart `deploy/charts/gophprofile`. Docker Compose остаётся способом
+локального запуска без кластера, вместе со стеком наблюдаемости ([§8](#8-наблюдаемость)).
+
+Приложение и его инфраструктура живут в одном namespace `gophprofile`. Отдельный
+namespace для БД у единственного сервиса ничего не изолирует и усложняет имена
+и политики; сетевые границы внутри namespace задаёт NetworkPolicy по `podSelector`.
+
+### 9.1 Состав ресурсов
+
+| Ресурс | Назначение |
+|---|---|
+| Deployment `server` | API и веб-интерфейс; репликами управляет HPA |
+| Deployment `worker` | обработка событий; фиксированное число реплик |
+| Job миграций | `migrator` как Helm hook `pre-install,pre-upgrade` — DDL до старта подов |
+| Service `server` | ClusterIP, 80 → 8080 |
+| Service `worker` | ClusterIP, только порт метрик — для скрейпа |
+| Ingress | внешний трафик к server; `proxy-body-size` согласован с лимитом загрузки 10MB |
+| ConfigMap | несекретная конфигурация |
+| Secret | `DATABASE_DSN`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `AMQP_URL` |
+| HPA `server` | по CPU и памяти ([§9.4](#94-масштабирование)) |
+| PodDisruptionBudget `server` | минимум одна реплика при добровольных выселениях |
+| ServiceMonitor | скрейп `/metrics` server и worker Prometheus-оператором |
+| NetworkPolicy | [§9.5](#95-безопасность) |
+| ServiceAccount | свой, без прав и без automount токена |
+| StatefulSet PostgreSQL / MinIO / RabbitMQ | инфраструктура dev-режима ([§9.6](#96-окружения)) |
+
+### 9.2 Конфигурация
+
+Переменные окружения — те же, что в compose. Несекретное — в ConfigMap, секреты — в Secret. В prod-values у секретов
+нет значений по умолчанию: релиз без них не устанавливается.
+
+### 9.3 Пробы и завершение
+
+- **Liveness** — `GET /livez`: у server на основном порту, у worker'а на
+  metrics-листенере. Зависимости не проверяются: их отказ рестарт пода не чинит.
+- **Readiness** server — `GET /health`: под с недоступной зависимостью выходит
+  из ротации Service. У worker'а readiness нет: входящий трафик он не принимает,
+  его Service существует ради скрейпа метрик.
+- **Завершение** — SIGTERM от kubelet запускает graceful shutdown;
+  `terminationGracePeriodSeconds` больше внутренних shutdown-таймаутов, чтобы
+  начатая работа и flush спанов успели до SIGKILL.
+
+### 9.4 Масштабирование
+
+HPA server: 2–10 реплик, целевая утилизация CPU 70% и памяти 80% от requests;
+требуется metrics-server. Worker не под HPA: его нагрузку определяет глубина
+очереди, а не CPU подов, — масштабирование по метрикам брокера (KEDA) вне объёма.
+`resources.requests`/`limits` заданы у обоих Deployment'ов; `GOMEMLIMIT` worker'а
+ниже limit памяти, как в compose.
+
+### 9.5 Безопасность
+
+NetworkPolicy (default deny в обе стороны, разрешено только перечисленное):
+
+- ingress server — от ingress-контроллера на порт приложения, от Prometheus на него же
+  (метрики на основном порту); ingress worker — только от Prometheus на порт метрик;
+- egress обоих — PostgreSQL, MinIO, RabbitMQ, OTLP-коллектор и DNS.
+
+Поды: `runAsNonRoot`, `readOnlyRootFilesystem`, `capabilities: drop ALL`,
+`seccompProfile: RuntimeDefault`, `allowPrivilegeEscalation: false`. Namespace
+помечен Pod Security Standards уровня `restricted` (enforce). PodSecurityPolicy
+не используется — удалён из Kubernetes в 1.25, его роль выполняют PSS.
+
+ServiceAccount свой; к API Kubernetes сервис не обращается, поэтому прав нет
+и `automountServiceAccountToken: false`.
+
+### 9.6 Окружения
+
+`values.yaml` — общие значения по умолчанию; окружения — накладываемые файлы:
+
+- **dev** (`values-dev.yaml`) — локальный кластер: PostgreSQL, MinIO и RabbitMQ
+  поднимаются минимальными StatefulSet'ами в том же namespace, бакет создаёт
+  одноразовый Job, креды локальные. Готовые чарты инфраструктуры не используются:
+  каталог Bitnami урезан и как зависимость ненадёжен, операторы для локального
+  кластера избыточны.
+- **prod** (`values-prod.yaml`) — StatefulSet'ы инфраструктуры выключены, адреса
+  приходят из values, секреты — из внешнего Secret.
+
+ServiceMonitor рассчитан на Prometheus Operator (локально — kube-prometheus-stack).

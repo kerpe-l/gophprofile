@@ -18,9 +18,10 @@ import (
 
 // Префикс REST API и служебные пути.
 const (
-	apiPrefix   = "/api/v1"
-	healthPath  = "/health"
-	metricsPath = "/metrics"
+	apiPrefix    = "/api/v1"
+	healthPath   = "/health"
+	livenessPath = "/livez"
+	metricsPath  = "/metrics"
 )
 
 // Имена компонентов в ответе /health.
@@ -106,6 +107,7 @@ func New(deps Deps) *chi.Mux {
 	r.Use(requestID, logging(deps.Log), recovering(deps.Log))
 
 	r.Get(healthPath, a.health)
+	r.Get(livenessPath, liveness)
 
 	if deps.MetricsHandler != nil {
 		r.Method(http.MethodGet, metricsPath, deps.MetricsHandler)
