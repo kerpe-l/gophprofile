@@ -1,0 +1,38 @@
+# Values для kube-prometheus-stack: только оператор, CRD и Prometheus —
+# остальной стек наблюдаемости живёт в docker compose.
+# helm install monitoring prometheus-community/kube-prometheus-stack \
+#   -n monitoring --create-namespace -f deploy/monitoring-values.yaml
+grafana:
+  enabled: false
+alertmanager:
+  enabled: false
+nodeExporter:
+  enabled: false
+kubeStateMetrics:
+  enabled: false
+defaultRules:
+  create: false
+kubelet:
+  enabled: false
+kubeApiServer:
+  enabled: false
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeProxy:
+  enabled: false
+kubeEtcd:
+  enabled: false
+coreDns:
+  enabled: false
+prometheus:
+  prometheusSpec:
+    serviceMonitorSelectorNilUsesHelmValues: false
+    retention: 24h
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        memory: 1Gi

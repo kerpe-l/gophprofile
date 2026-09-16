@@ -47,6 +47,8 @@ kind: Service
 metadata:
   name: worker
   namespace: gophprofile
+  labels:
+    app: worker
 spec:
   selector:
     app: worker
