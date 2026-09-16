@@ -25,9 +25,22 @@ spec:
       labels:
         app: rabbitmq
     spec:
+      serviceAccountName: gophprofile
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 100
+        runAsGroup: 101
+        fsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: rabbitmq
           image: rabbitmq:4-management-alpine
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
           ports:
             - containerPort: 5672
           env:
@@ -44,6 +57,8 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /var/lib/rabbitmq
+            - name: tmp
+              mountPath: /tmp
           readinessProbe:
             exec:
               command: ["rabbitmq-diagnostics", "-q", "ping"]
@@ -57,6 +72,9 @@ spec:
             limits:
               cpu: "1"
               memory: 1Gi
+      volumes:
+        - name: tmp
+          emptyDir: {}
   volumeClaimTemplates:
     - metadata:
         name: data
