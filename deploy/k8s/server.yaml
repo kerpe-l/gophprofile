@@ -4,7 +4,6 @@ metadata:
   name: server
   namespace: gophprofile
 spec:
-  replicas: 2
   selector:
     matchLabels:
       app: server
