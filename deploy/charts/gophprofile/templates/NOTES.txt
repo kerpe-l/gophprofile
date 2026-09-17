@@ -1,0 +1,12 @@
+GophProfile установлен в namespace {{ .Release.Namespace }}.
+
+Сервис доступен через Ingress:
+  http://{{ .Values.ingress.host }}/
+
+Проверка:
+  curl http://{{ .Values.ingress.host }}/health
+
+Namespace должен нести лейблы Pod Security Standards (chart ими не управляет):
+  kubectl label namespace {{ .Release.Namespace }} \
+    pod-security.kubernetes.io/enforce=restricted \
+    pod-security.kubernetes.io/warn=restricted

@@ -2,7 +2,8 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: server
-  namespace: gophprofile
+  labels:
+    {{- include "gophprofile.labels" . | nindent 4 }}
 spec:
   selector:
     matchLabels:
@@ -21,13 +22,10 @@ spec:
           type: RuntimeDefault
       containers:
         - name: server
-          image: gophprofile-server:latest
-          imagePullPolicy: Never
+          image: {{ .Values.images.server.repository }}:{{ .Values.images.server.tag }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
           securityContext:
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities:
-              drop: ["ALL"]
+            {{- include "gophprofile.containerSecurityContext" . | nindent 12 }}
           ports:
             - name: http
               containerPort: 8080
@@ -35,7 +33,7 @@ spec:
             - configMapRef:
                 name: gophprofile-config
             - secretRef:
-                name: gophprofile-secrets
+                name: {{ include "gophprofile.secretName" . }}
           livenessProbe:
             httpGet:
               path: /livez
@@ -49,20 +47,15 @@ spec:
             initialDelaySeconds: 5
             periodSeconds: 10
           resources:
-            requests:
-              cpu: 100m
-              memory: 128Mi
-            limits:
-              cpu: 500m
-              memory: 512Mi
+            {{- toYaml .Values.server.resources | nindent 12 }}
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: server
-  namespace: gophprofile
   labels:
     app: server
+    {{- include "gophprofile.labels" . | nindent 4 }}
 spec:
   selector:
     app: server

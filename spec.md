@@ -393,7 +393,7 @@ namespace для БД у единственного сервиса ничего 
 |---|---|
 | Deployment `server` | API и веб-интерфейс; репликами управляет HPA |
 | Deployment `worker` | обработка событий; фиксированное число реплик |
-| Job миграций | `migrator` как Helm hook `pre-install,pre-upgrade` — DDL до старта подов |
+| Job миграций | `migrator` как Helm hook `post-install,pre-upgrade`: на установке — после подъёма инфраструктуры релиза, на обновлении — до перекатки подов |
 | Service `server` | ClusterIP, 80 → 8080 |
 | Service `worker` | ClusterIP, только порт метрик — для скрейпа |
 | Ingress | внешний трафик к server; `proxy-body-size` согласован с лимитом загрузки 10MB |
@@ -440,8 +440,9 @@ NetworkPolicy (default deny в обе стороны, разрешено тол�
 
 Поды: `runAsNonRoot`, `readOnlyRootFilesystem`, `capabilities: drop ALL`,
 `seccompProfile: RuntimeDefault`, `allowPrivilegeEscalation: false`. Namespace
-помечен Pod Security Standards уровня `restricted` (enforce). PodSecurityPolicy
-не используется — удалён из Kubernetes в 1.25, его роль выполняют PSS.
+помечен Pod Security Standards уровня `restricted` (enforce); лейблы ставятся
+при создании namespace, вне chart'а. PodSecurityPolicy не используется —
+удалён из Kubernetes в 1.25, его роль выполняют PSS.
 
 ServiceAccount свой; к API Kubernetes сервис не обращается, поэтому прав нет
 и `automountServiceAccountToken: false`.

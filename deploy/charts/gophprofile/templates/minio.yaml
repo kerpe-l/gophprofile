@@ -1,8 +1,10 @@
+{{- if .Values.minio.enabled }}
 apiVersion: v1
 kind: Service
 metadata:
   name: minio
-  namespace: gophprofile
+  labels:
+    {{- include "gophprofile.labels" . | nindent 4 }}
 spec:
   selector:
     app: minio
@@ -13,7 +15,8 @@ apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: minio
-  namespace: gophprofile
+  labels:
+    {{- include "gophprofile.labels" . | nindent 4 }}
 spec:
   serviceName: minio
   replicas: 1
@@ -31,6 +34,7 @@ spec:
         runAsUser: 1000
         runAsGroup: 1000
         fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -38,22 +42,19 @@ spec:
           image: quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z
           args: ["server", "/data"]
           securityContext:
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities:
-              drop: ["ALL"]
+            {{- include "gophprofile.containerSecurityContext" . | nindent 12 }}
           ports:
             - containerPort: 9000
           env:
             - name: MINIO_ROOT_USER
               valueFrom:
                 secretKeyRef:
-                  name: gophprofile-secrets
+                  name: {{ include "gophprofile.secretName" . }}
                   key: S3_ACCESS_KEY
             - name: MINIO_ROOT_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: gophprofile-secrets
+                  name: {{ include "gophprofile.secretName" . }}
                   key: S3_SECRET_KEY
             # minio создаёт $HOME/.minio при старте — нужен writable HOME.
             - name: HOME
@@ -85,14 +86,18 @@ spec:
         accessModes: ["ReadWriteOnce"]
         resources:
           requests:
-            storage: 2Gi
+            storage: {{ .Values.minio.storage }}
 ---
-# Одноразовое создание бакета, как minio-init в compose.
+# Одноразовое создание бакета, как minio-init в compose; mc mb идемпотентен.
 apiVersion: batch/v1
 kind: Job
 metadata:
   name: minio-init
-  namespace: gophprofile
+  labels:
+    {{- include "gophprofile.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-delete-policy: before-hook-creation
 spec:
   backoffLimit: 10
   ttlSecondsAfterFinished: 600
@@ -114,20 +119,17 @@ spec:
           image: quay.io/minio/mc:RELEASE.2025-04-16T18-13-26Z
           command: ["mc", "mb", "--ignore-existing", "local/$(S3_BUCKET)"]
           securityContext:
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities:
-              drop: ["ALL"]
+            {{- include "gophprofile.containerSecurityContext" . | nindent 12 }}
           env:
             - name: S3_ACCESS_KEY
               valueFrom:
                 secretKeyRef:
-                  name: gophprofile-secrets
+                  name: {{ include "gophprofile.secretName" . }}
                   key: S3_ACCESS_KEY
             - name: S3_SECRET_KEY
               valueFrom:
                 secretKeyRef:
-                  name: gophprofile-secrets
+                  name: {{ include "gophprofile.secretName" . }}
                   key: S3_SECRET_KEY
             - name: S3_BUCKET
               valueFrom:
@@ -145,3 +147,4 @@ spec:
       volumes:
         - name: tmp
           emptyDir: {}
+{{- end }}

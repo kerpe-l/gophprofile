@@ -1,10 +1,13 @@
+{{- if .Values.networkPolicy.enabled }}
 # Пиры вне namespace выбираются по kubernetes.io/metadata.name и лейблам
-# компонента: имена helm-релизов Traefik и Prometheus манифесты не знают.
+# компонента из values: имена релизов ingress-контроллера и Prometheus
+# chart не знает.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: default-deny
-  namespace: gophprofile
+  labels:
+    {{- include "gophprofile.labels" . | nindent 4 }}
 spec:
   podSelector: {}
   policyTypes: [Ingress, Egress]
@@ -13,7 +16,8 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: allow-dns
-  namespace: gophprofile
+  labels:
+    {{- include "gophprofile.labels" . | nindent 4 }}
 spec:
   podSelector: {}
   policyTypes: [Egress]
@@ -35,7 +39,8 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: server
-  namespace: gophprofile
+  labels:
+    {{- include "gophprofile.labels" . | nindent 4 }}
 spec:
   podSelector:
     matchLabels:
@@ -45,43 +50,27 @@ spec:
     - from:
         - namespaceSelector:
             matchLabels:
-              kubernetes.io/metadata.name: kube-system
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.ingressController.namespace }}
           podSelector:
             matchLabels:
-              app.kubernetes.io/name: traefik
+              {{- toYaml .Values.networkPolicy.ingressController.podLabels | nindent 14 }}
         - namespaceSelector:
             matchLabels:
-              kubernetes.io/metadata.name: monitoring
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.prometheus.namespace }}
           podSelector:
             matchLabels:
-              app.kubernetes.io/name: prometheus
+              {{- toYaml .Values.networkPolicy.prometheus.podLabels | nindent 14 }}
       ports:
         - port: 8080
   egress:
-    - to:
-        - podSelector:
-            matchLabels:
-              app: db
-      ports:
-        - port: 5432
-    - to:
-        - podSelector:
-            matchLabels:
-              app: minio
-      ports:
-        - port: 9000
-    - to:
-        - podSelector:
-            matchLabels:
-              app: rabbitmq
-      ports:
-        - port: 5672
+    {{- include "gophprofile.appEgress" . | nindent 4 }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: worker
-  namespace: gophprofile
+  labels:
+    {{- include "gophprofile.labels" . | nindent 4 }}
 spec:
   podSelector:
     matchLabels:
@@ -91,73 +80,49 @@ spec:
     - from:
         - namespaceSelector:
             matchLabels:
-              kubernetes.io/metadata.name: monitoring
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.prometheus.namespace }}
           podSelector:
             matchLabels:
-              app.kubernetes.io/name: prometheus
+              {{- toYaml .Values.networkPolicy.prometheus.podLabels | nindent 14 }}
       ports:
         - port: 9090
   egress:
-    - to:
-        - podSelector:
-            matchLabels:
-              app: db
-      ports:
-        - port: 5432
-    - to:
-        - podSelector:
-            matchLabels:
-              app: minio
-      ports:
-        - port: 9000
-    - to:
-        - podSelector:
-            matchLabels:
-              app: rabbitmq
-      ports:
-        - port: 5672
+    {{- include "gophprofile.appEgress" . | nindent 4 }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: migrations
-  namespace: gophprofile
+  labels:
+    {{- include "gophprofile.labels" . | nindent 4 }}
 spec:
   podSelector:
     matchLabels:
       app: migrations
   policyTypes: [Egress]
   egress:
+    {{- if .Values.postgres.enabled }}
     - to:
         - podSelector:
             matchLabels:
               app: db
       ports:
         - port: 5432
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: minio-init
-  namespace: gophprofile
-spec:
-  podSelector:
-    matchLabels:
-      app: minio-init
-  policyTypes: [Egress]
-  egress:
+    {{- else }}
     - to:
-        - podSelector:
-            matchLabels:
-              app: minio
+        - ipBlock:
+            cidr: {{ .Values.networkPolicy.externalEgress.cidr }}
       ports:
-        - port: 9000
+        - port: {{ .Values.networkPolicy.externalEgress.ports.postgres }}
+    {{- end }}
+{{- if .Values.postgres.enabled }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: db
-  namespace: gophprofile
+  labels:
+    {{- include "gophprofile.labels" . | nindent 4 }}
 spec:
   podSelector:
     matchLabels:
@@ -176,12 +141,34 @@ spec:
               app: migrations
       ports:
         - port: 5432
+{{- end }}
+{{- if .Values.minio.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: minio-init
+  labels:
+    {{- include "gophprofile.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app: minio-init
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: minio
+      ports:
+        - port: 9000
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: minio
-  namespace: gophprofile
+  labels:
+    {{- include "gophprofile.labels" . | nindent 4 }}
 spec:
   podSelector:
     matchLabels:
@@ -200,12 +187,15 @@ spec:
               app: minio-init
       ports:
         - port: 9000
+{{- end }}
+{{- if .Values.rabbitmq.enabled }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: rabbitmq
-  namespace: gophprofile
+  labels:
+    {{- include "gophprofile.labels" . | nindent 4 }}
 spec:
   podSelector:
     matchLabels:
@@ -221,3 +211,5 @@ spec:
               app: worker
       ports:
         - port: 5672
+{{- end }}
+{{- end }}

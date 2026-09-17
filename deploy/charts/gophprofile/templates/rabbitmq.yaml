@@ -1,8 +1,10 @@
+{{- if .Values.rabbitmq.enabled }}
 apiVersion: v1
 kind: Service
 metadata:
   name: rabbitmq
-  namespace: gophprofile
+  labels:
+    {{- include "gophprofile.labels" . | nindent 4 }}
 spec:
   selector:
     app: rabbitmq
@@ -13,7 +15,8 @@ apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: rabbitmq
-  namespace: gophprofile
+  labels:
+    {{- include "gophprofile.labels" . | nindent 4 }}
 spec:
   serviceName: rabbitmq
   replicas: 1
@@ -31,28 +34,37 @@ spec:
         runAsUser: 100
         runAsGroup: 101
         fsGroup: 101
+        fsGroupChangePolicy: OnRootMismatch
         seccompProfile:
           type: RuntimeDefault
+      # kubelet при применении fsGroup даёт группе rw, а RabbitMQ требует
+      # cookie с правами строго 600.
+      initContainers:
+        - name: fix-cookie-perms
+          image: rabbitmq:4-management-alpine
+          command: ["sh", "-c", "chmod 600 /var/lib/rabbitmq/.erlang.cookie 2>/dev/null || true"]
+          securityContext:
+            {{- include "gophprofile.containerSecurityContext" . | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/rabbitmq
       containers:
         - name: rabbitmq
           image: rabbitmq:4-management-alpine
           securityContext:
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities:
-              drop: ["ALL"]
+            {{- include "gophprofile.containerSecurityContext" . | nindent 12 }}
           ports:
             - containerPort: 5672
           env:
             - name: RABBITMQ_DEFAULT_USER
               valueFrom:
                 secretKeyRef:
-                  name: gophprofile-secrets
+                  name: {{ include "gophprofile.secretName" . }}
                   key: RABBITMQ_DEFAULT_USER
             - name: RABBITMQ_DEFAULT_PASS
               valueFrom:
                 secretKeyRef:
-                  name: gophprofile-secrets
+                  name: {{ include "gophprofile.secretName" . }}
                   key: RABBITMQ_DEFAULT_PASS
           volumeMounts:
             - name: data
@@ -82,4 +94,5 @@ spec:
         accessModes: ["ReadWriteOnce"]
         resources:
           requests:
-            storage: 1Gi
+            storage: {{ .Values.rabbitmq.storage }}
+{{- end }}

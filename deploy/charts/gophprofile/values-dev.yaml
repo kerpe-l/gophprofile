@@ -1,0 +1,24 @@
+# Локальный кластер: инфраструктура внутри, образы собраны в containerd кластера.
+
+images:
+  pullPolicy: Never
+
+secrets:
+  create: true
+  values:
+    DATABASE_DSN: postgres://gophprofile:gophprofile@db:5432/gophprofile?sslmode=disable
+    S3_ACCESS_KEY: minioadmin
+    S3_SECRET_KEY: minioadmin
+    AMQP_URL: amqp://guest:guest@rabbitmq:5672/
+    POSTGRES_USER: gophprofile
+    POSTGRES_PASSWORD: gophprofile
+    POSTGRES_DB: gophprofile
+    RABBITMQ_DEFAULT_USER: guest
+    RABBITMQ_DEFAULT_PASS: guest
+
+postgres:
+  enabled: true
+minio:
+  enabled: true
+rabbitmq:
+  enabled: true
