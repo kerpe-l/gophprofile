@@ -16,6 +16,10 @@ data:
   {{- end }}
   S3_BUCKET: {{ .Values.config.s3Bucket | quote }}
   S3_USE_SSL: {{ .Values.config.s3UseSSL | quote }}
+  {{- with .Values.config.s3Region }}
+  S3_REGION: {{ . | quote }}
+  {{- end }}
   {{- with .Values.config.otlpEndpoint }}
   OTEL_EXPORTER_OTLP_ENDPOINT: {{ . | quote }}
+  OTEL_EXPORTER_OTLP_INSECURE: {{ $.Values.config.otlpInsecure | quote }}
   {{- end }}

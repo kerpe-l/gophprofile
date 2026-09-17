@@ -30,8 +30,13 @@ helm install gophprofile deploy/charts/gophprofile \
 helm install gophprofile deploy/charts/gophprofile \
   -n gophprofile -f deploy/charts/gophprofile/values-prod.yaml \
   --set secrets.existingSecret=<имя> \
-  --set config.s3Endpoint=<host:port>
+  --set config.s3Endpoint=<host:port> \
+  --set networkPolicy.externalEgress.cidr=<cidr инфраструктуры>
 ```
+
+Порты egress к внешней инфраструктуре — `networkPolicy.externalEgress.ports`;
+для S3 за HTTPS на стандартном порту нужен `--set ...ports.s3=443`. Регион
+подписи S3 задаётся `config.s3Region`.
 
 Обновление — `helm upgrade` с теми же аргументами: миграции выполняются
 pre-upgrade hook'ом до перекатки подов. `helm uninstall` не удаляет PVC

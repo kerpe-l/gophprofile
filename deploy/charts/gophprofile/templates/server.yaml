@@ -14,6 +14,7 @@ spec:
         app: server
     spec:
       serviceAccountName: gophprofile
+      terminationGracePeriodSeconds: 30
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532
@@ -34,6 +35,9 @@ spec:
                 name: gophprofile-config
             - secretRef:
                 name: {{ include "gophprofile.secretName" . }}
+          env:
+            - name: GOMEMLIMIT
+              value: {{ .Values.server.gomemlimit | quote }}
           livenessProbe:
             httpGet:
               path: /livez
@@ -46,6 +50,9 @@ spec:
               port: http
             initialDelaySeconds: 5
             periodSeconds: 10
+            # Не меньше checkTimeout хендлера: зависимость, ответившая за 2s,
+            # здорова по меркам приложения.
+            timeoutSeconds: 3
           resources:
             {{- toYaml .Values.server.resources | nindent 12 }}
 ---

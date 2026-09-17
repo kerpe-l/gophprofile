@@ -15,6 +15,9 @@ spec:
         app: worker
     spec:
       serviceAccountName: gophprofile
+      # Больше бюджета завершения: обработка сообщения до 60s плюс flush
+      # спанов и метрик.
+      terminationGracePeriodSeconds: 75
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532

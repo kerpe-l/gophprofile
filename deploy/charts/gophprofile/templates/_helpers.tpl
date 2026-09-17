@@ -20,7 +20,11 @@ capabilities:
   drop: ["ALL"]
 {{- end }}
 
-{{/* Egress server и worker к инфраструктуре: podSelector при инфре в кластере, ipBlock — при внешней. */}}
+{{- define "gophprofile.externalCidr" -}}
+{{- required "set networkPolicy.externalEgress.cidr for egress outside the cluster" .Values.networkPolicy.externalEgress.cidr -}}
+{{- end }}
+
+{{/* Egress server и worker: podSelector при инфре в кластере, ipBlock — при внешней; OTLP — при заданном endpoint'е. */}}
 {{- define "gophprofile.appEgress" -}}
 {{- if .Values.postgres.enabled }}
 - to:
@@ -32,7 +36,7 @@ capabilities:
 {{- else }}
 - to:
     - ipBlock:
-        cidr: {{ .Values.networkPolicy.externalEgress.cidr }}
+        cidr: {{ include "gophprofile.externalCidr" . }}
   ports:
     - port: {{ .Values.networkPolicy.externalEgress.ports.postgres }}
 {{- end }}
@@ -46,7 +50,7 @@ capabilities:
 {{- else }}
 - to:
     - ipBlock:
-        cidr: {{ .Values.networkPolicy.externalEgress.cidr }}
+        cidr: {{ include "gophprofile.externalCidr" . }}
   ports:
     - port: {{ .Values.networkPolicy.externalEgress.ports.s3 }}
 {{- end }}
@@ -60,8 +64,15 @@ capabilities:
 {{- else }}
 - to:
     - ipBlock:
-        cidr: {{ .Values.networkPolicy.externalEgress.cidr }}
+        cidr: {{ include "gophprofile.externalCidr" . }}
   ports:
     - port: {{ .Values.networkPolicy.externalEgress.ports.amqp }}
+{{- end }}
+{{- with .Values.config.otlpEndpoint }}
+- to:
+    - ipBlock:
+        cidr: {{ include "gophprofile.externalCidr" $ }}
+  ports:
+    - port: {{ splitList ":" . | last }}
 {{- end }}
 {{- end }}

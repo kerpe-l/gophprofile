@@ -20,8 +20,11 @@ config:
   # Адрес S3 вне кластера; при включённом minio по умолчанию minio:9000.
   s3Endpoint: ""
   s3UseSSL: false
+  # Регион подписи S3-запросов; пустое значение — дефолт приложения.
+  s3Region: ""
   # host:port OTLP-коллектора; пустое значение выключает трейсинг.
   otlpEndpoint: ""
+  otlpInsecure: true
 
 secrets:
   # Создать Secret из values (dev). Иначе обязателен existingSecret
@@ -31,6 +34,7 @@ secrets:
   existingSecret: ""
 
 server:
+  gomemlimit: 400MiB
   resources:
     requests:
       cpu: 100m
@@ -76,9 +80,10 @@ networkPolicy:
     namespace: monitoring
     podLabels:
       app.kubernetes.io/name: prometheus
-  # Egress к инфраструктуре вне кластера (когда postgres/minio/rabbitmq выключены).
+  # Egress к адресам вне кластера: инфраструктура при выключенных
+  # postgres/minio/rabbitmq и OTLP-коллектор. 
   externalEgress:
-    cidr: 0.0.0.0/0
+    cidr: ""
     ports:
       postgres: 5432
       s3: 9000

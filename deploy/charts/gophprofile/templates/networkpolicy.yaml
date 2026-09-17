@@ -111,7 +111,7 @@ spec:
     {{- else }}
     - to:
         - ipBlock:
-            cidr: {{ .Values.networkPolicy.externalEgress.cidr }}
+            cidr: {{ include "gophprofile.externalCidr" . }}
       ports:
         - port: {{ .Values.networkPolicy.externalEgress.ports.postgres }}
     {{- end }}

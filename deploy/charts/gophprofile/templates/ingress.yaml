@@ -16,7 +16,15 @@ spec:
     - host: {{ .Values.ingress.host }}
       http:
         paths:
-          - path: /
+          # Только API и веб-интерфейс: /metrics и /health снаружи не видны.
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: server
+                port:
+                  name: http
+          - path: /web
             pathType: Prefix
             backend:
               service:

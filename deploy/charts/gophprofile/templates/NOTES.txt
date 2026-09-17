@@ -3,8 +3,8 @@ GophProfile установлен в namespace {{ .Release.Namespace }}.
 Сервис доступен через Ingress:
   http://{{ .Values.ingress.host }}/
 
-Проверка:
-  curl http://{{ .Values.ingress.host }}/health
+Проверка (эндпоинт отдаёт заглушку даже без загруженных аватаров):
+  curl -I http://{{ .Values.ingress.host }}/api/v1/users/anyone/avatar
 
 Namespace должен нести лейблы Pod Security Standards (chart ими не управляет):
   kubectl label namespace {{ .Release.Namespace }} \
