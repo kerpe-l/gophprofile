@@ -42,7 +42,40 @@ Compose поднимает PostgreSQL, MinIO и RabbitMQ, прогоняет м�
 на старте. Compose файл `.env` подхватывает сам; бинарники читают только окружение
 процесса, поэтому при запуске напрямую переменные нужно экспортировать.
 
+## Деплой в Kubernetes
+
+Helm Chart [deploy/charts/gophprofile](deploy/charts/gophprofile):
+server под HPA, worker, миграции hook'ом, NetworkPolicy и Pod Security
+Standards `restricted`. В dev-режиме chart поднимает PostgreSQL, MinIO
+и RabbitMQ минимальными StatefulSet'ами; в prod инфраструктура внешняя.
+Команды установки и values окружений — в
+[README chart'а](deploy/charts/gophprofile/README.md). Compose остаётся
+способом локального запуска без кластера.
+
+```mermaid
+flowchart LR
+    client((Клиент)) --> ingress[Ingress]
+    subgraph ns["namespace gophprofile"]
+        ingress --> server["Deployment server (HPA 2–10)"]
+        server --> db[("StatefulSet PostgreSQL")]
+        server --> s3[("StatefulSet MinIO")]
+        server --> mq[["StatefulSet RabbitMQ"]]
+        mq --> worker["Deployment worker"]
+        worker --> db
+        worker --> s3
+        migrations["Job migrations (hook)"] --> db
+        init["Job minio-init (hook)"] --> s3
+    end
+    prom["Prometheus (ServiceMonitor)"] -.->|скрейп| server
+    prom -.->|скрейп| worker
+```
+
+Сетевые границы: default deny в обе стороны, разрешены только показанные
+стрелки, ingress от ingress-контроллера и Prometheus, DNS.
+
 ## API
+
+Формальное описание — [api/openapi.yaml](api/openapi.yaml).
 
 | Маршрут | Назначение |
 |---|---|
