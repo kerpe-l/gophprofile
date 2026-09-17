@@ -21,7 +21,7 @@ import (
 )
 
 // minioImage — та же версия, что в docker-compose.yml.
-const minioImage = "minio/minio:RELEASE.2025-04-22T22-12-26Z"
+const minioImage = "quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z"
 
 const (
 	originalKey   = "originals/97b3d1c8-0000-4000-8000-000000000000"
