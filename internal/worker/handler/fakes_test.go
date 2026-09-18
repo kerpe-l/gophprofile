@@ -27,6 +27,7 @@ const (
 	callRetry      = "retry"
 	callDeleteMany = "delete_many"
 	callThumbnails = "thumbnails"
+	callMarkFiles  = "mark_files_removed"
 )
 
 // callLog — общий журнал вызовов всех фейков.
@@ -63,10 +64,12 @@ type fakeRepo struct {
 	failStatusErr error
 	completeErr   error
 	retryErr      error
+	markErr       error
 
 	statuses   []domain.ProcessingStatus
 	completed  map[domain.ThumbnailSize]string
 	retryCount int
+	cleaned    []uuid.UUID
 }
 
 func (r *fakeRepo) Get(_ context.Context, _ uuid.UUID) (domain.Avatar, error) {
@@ -104,6 +107,13 @@ func (r *fakeRepo) IncrementRetry(_ context.Context, _ uuid.UUID) error {
 	r.retryCount++
 
 	return r.retryErr
+}
+
+func (r *fakeRepo) MarkFilesRemoved(_ context.Context, id uuid.UUID) error {
+	r.log.add(callMarkFiles)
+	r.cleaned = append(r.cleaned, id)
+
+	return r.markErr
 }
 
 // storedObject — записанный в хранилище объект.

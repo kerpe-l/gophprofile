@@ -40,6 +40,9 @@ type Repository interface {
 	CompleteProcessing(ctx context.Context, id uuid.UUID, thumbnails map[domain.ThumbnailSize]string) error
 	// IncrementRetry увеличивает счётчик попыток обработки.
 	IncrementRetry(ctx context.Context, id uuid.UUID) error
+	// MarkFilesRemoved отмечает, что файлы аватара убраны из хранилища;
+	// работает и для удалённой записи.
+	MarkFilesRemoved(ctx context.Context, id uuid.UUID) error
 }
 
 // Storage — оригиналы и миниатюры в объектном хранилище.

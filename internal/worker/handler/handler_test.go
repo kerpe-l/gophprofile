@@ -220,36 +220,39 @@ func TestHandleNonRetryable(t *testing.T) {
 	}
 }
 
-// Запись исчезла, пока писались миниатюры: событие удаления их не застало,
+// Запись удалили, пока писались миниатюры: событие удаления их не застало,
 // поэтому обработчик убирает их за собой сам.
 func TestHandleUploadedRemovesOrphanedThumbnails(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name        string
-		completeErr error
-	}{
-		{name: "avatar deleted", completeErr: domain.ErrNotFound},
-		{name: "processing finished elsewhere", completeErr: domain.ErrInvalidTransition},
-	}
+	avatar := newAvatar()
+	d := newDeps(avatar)
+	d.repo.completeErr = domain.ErrNotFound
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
+	err := newHandler(t, d).Handle(t.Context(), uploadMessage(t, avatar))
+	require.ErrorIs(t, err, broker.ErrNonRetryable)
 
-			avatar := newAvatar()
-			d := newDeps(avatar)
-			d.repo.completeErr = tc.completeErr
+	assert.Equal(t, []string{
+		domain.ThumbnailKey(avatar.ID, domain.ThumbnailSmall),
+		domain.ThumbnailKey(avatar.ID, domain.ThumbnailMedium),
+	}, d.storage.deleted)
+}
 
-			err := newHandler(t, d).Handle(t.Context(), uploadMessage(t, avatar))
-			require.ErrorIs(t, err, broker.ErrNonRetryable)
+// Две доставки одного события обрабатывали запись одновременно, и первая уже
+// завершила её: миниатюры по тем же ключам принадлежат завершённой записи.
+func TestHandleUploadedKeepsThumbnailsWhenFinishedElsewhere(t *testing.T) {
+	t.Parallel()
 
-			assert.Equal(t, []string{
-				domain.ThumbnailKey(avatar.ID, domain.ThumbnailSmall),
-				domain.ThumbnailKey(avatar.ID, domain.ThumbnailMedium),
-			}, d.storage.deleted)
-		})
-	}
+	avatar := newAvatar()
+	d := newDeps(avatar)
+	d.repo.completeErr = domain.ErrInvalidTransition
+
+	err := newHandler(t, d).Handle(t.Context(), uploadMessage(t, avatar))
+	require.NoError(t, err)
+
+	assert.Empty(t, d.storage.deleted)
+	assert.NotContains(t, d.repo.statuses, domain.ProcessingStatusFailed)
+	assert.Empty(t, d.metrics.processed(), "skipped delivery is not a processing attempt")
 }
 
 // Временный отказ зависимости уходит на повтор: статус остаётся рабочим,
@@ -405,20 +408,81 @@ func TestHandleDeleted(t *testing.T) {
 	require.NoError(t, newHandler(t, d).Handle(t.Context(), deleteMessage(t, id, keys)))
 
 	assert.Equal(t, keys, d.storage.deleted)
-	// Мягко удалённая запись запросам не видна: ключи едут в самом событии.
-	assert.Equal(t, []string{callDeleteMany}, d.log.list())
+	assert.Equal(t, []uuid.UUID{id}, d.repo.cleaned)
+	// Мягко удалённая запись запросам не видна: ключи едут в самом событии,
+	// а отметка об уборке ставится только после удаления файлов.
+	assert.Equal(t, []string{callDeleteMany, callMarkFiles}, d.log.list())
 }
 
 func TestHandleDeletedRetryable(t *testing.T) {
 	t.Parallel()
 
-	id := uuid.New()
-	d := newDeps(newAvatar())
-	d.storage.deleteErr = errUnavailable
+	tests := []struct {
+		name  string
+		setup func(*deps)
+	}{
+		{name: "delete files", setup: func(d *deps) { d.storage.deleteErr = errUnavailable }},
+		{name: "mark files removed", setup: func(d *deps) { d.repo.markErr = errUnavailable }},
+	}
 
-	err := newHandler(t, d).Handle(t.Context(), deleteMessage(t, id, []string{domain.OriginalKey(id)}))
-	require.ErrorIs(t, err, errUnavailable)
-	assert.NotErrorIs(t, err, broker.ErrNonRetryable)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			id := uuid.New()
+			d := newDeps(newAvatar())
+			tc.setup(d)
+
+			err := newHandler(t, d).Handle(t.Context(), deleteMessage(t, id, []string{domain.OriginalKey(id)}))
+			require.ErrorIs(t, err, errUnavailable)
+			assert.NotErrorIs(t, err, broker.ErrNonRetryable)
+		})
+	}
+}
+
+func TestHandleDeletedNonRetryable(t *testing.T) {
+	t.Parallel()
+
+	id := uuid.New()
+
+	tests := []struct {
+		name  string
+		msg   func(t *testing.T) broker.Message
+		setup func(*deps)
+	}{
+		{name: "avatar id is not a uuid", msg: func(t *testing.T) broker.Message {
+			t.Helper()
+
+			msg := deleteMessage(t, id, []string{domain.OriginalKey(id)})
+			msg.Body = []byte(`{"message_id":"m-1","avatar_id":"not-a-uuid","s3_keys":["k"]}`)
+
+			return msg
+		}},
+		{name: "no keys", msg: func(t *testing.T) broker.Message {
+			t.Helper()
+
+			return deleteMessage(t, id, nil)
+		}},
+		{name: "unknown avatar", msg: func(t *testing.T) broker.Message {
+			t.Helper()
+
+			return deleteMessage(t, id, []string{domain.OriginalKey(id)})
+		}, setup: func(d *deps) { d.repo.markErr = domain.ErrNotFound }},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			d := newDeps(newAvatar())
+			if tc.setup != nil {
+				tc.setup(d)
+			}
+
+			err := newHandler(t, d).Handle(t.Context(), tc.msg(t))
+			require.ErrorIs(t, err, broker.ErrNonRetryable)
+		})
+	}
 }
 
 // Идемпотентный пропуск и уборка по avatar.deleted попытками обработки

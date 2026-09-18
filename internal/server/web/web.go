@@ -44,6 +44,10 @@ const (
 	paramSize = "size"
 )
 
+// headerUserID — владелец, которого проставил доверенный gateway. Если он
+// есть, форма загрузки владельца не выбирает.
+const headerUserID = "X-User-ID"
+
 // apiAvatarsPath — путь раздачи изображений. Своего канала для картинок
 // у веб-интерфейса нет, страницы ссылаются на REST API.
 const apiAvatarsPath = "/api/v1/avatars"

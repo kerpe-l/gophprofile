@@ -482,6 +482,106 @@ func (s *RepositorySuite) TestSelectStuckRejectsNonPositiveLimit() {
 	}
 }
 
+func (s *RepositorySuite) TestSelectUncleaned() {
+	ctx := s.T().Context()
+	cutoff := time.Now().Add(-5 * time.Minute)
+	old := cutoff.Add(-time.Minute)
+
+	deleted := s.createUploadedAvatar(userAlice)
+	failed := s.createAvatar(userAlice)
+	cleaned := s.createUploadedAvatar(userAlice)
+	fresh := s.createUploadedAvatar(userAlice)
+	alive := s.createUploadedAvatar(userAlice)
+
+	s.Require().NoError(s.repo.SoftDelete(ctx, deleted.ID))
+	s.Require().NoError(s.repo.SetUploadStatus(ctx, failed.ID, domain.UploadStatusFailed))
+	s.Require().NoError(s.repo.SoftDelete(ctx, cleaned.ID))
+	s.Require().NoError(s.repo.MarkFilesRemoved(ctx, cleaned.ID))
+	s.Require().NoError(s.repo.SoftDelete(ctx, fresh.ID))
+
+	for _, id := range []uuid.UUID{deleted.ID, failed.ID, cleaned.ID, alive.ID} {
+		s.execSQL(`UPDATE avatars SET updated_at = $2 WHERE id = $1`, id, old)
+	}
+
+	avatars := s.collect(s.repo.SelectUncleaned(ctx, cutoff, 10))
+
+	ids := make([]uuid.UUID, 0, len(avatars))
+	for _, avatar := range avatars {
+		ids = append(ids, avatar.ID)
+	}
+
+	s.ElementsMatch([]uuid.UUID{deleted.ID, failed.ID}, ids)
+}
+
+func (s *RepositorySuite) TestSelectUncleanedRespectsLimit() {
+	ctx := s.T().Context()
+
+	for range 3 {
+		avatar := s.createAvatar(userAlice)
+		s.Require().NoError(s.repo.SetUploadStatus(ctx, avatar.ID, domain.UploadStatusFailed))
+	}
+
+	s.Len(s.collect(s.repo.SelectUncleaned(ctx, time.Now().Add(time.Minute), 2)), 2)
+
+	for _, err := range s.repo.SelectUncleaned(ctx, time.Now(), 0) {
+		s.Require().Error(err)
+	}
+}
+
+func (s *RepositorySuite) TestFailStaleUploads() {
+	ctx := s.T().Context()
+	cutoff := time.Now().Add(-5 * time.Minute)
+	old := cutoff.Add(-time.Minute)
+
+	stale := s.createAvatar(userAlice)
+	fresh := s.createAvatar(userAlice)
+	uploaded := s.createUploadedAvatar(userAlice)
+	deleted := s.createAvatar(userAlice)
+
+	s.Require().NoError(s.repo.SoftDelete(ctx, deleted.ID))
+
+	for _, id := range []uuid.UUID{stale.ID, uploaded.ID, deleted.ID} {
+		s.execSQL(`UPDATE avatars SET updated_at = $2 WHERE id = $1`, id, old)
+	}
+
+	failed, err := s.repo.FailStaleUploads(ctx, cutoff)
+	s.Require().NoError(err)
+	s.Equal(int64(1), failed)
+
+	for id, want := range map[uuid.UUID]domain.UploadStatus{
+		stale.ID:    domain.UploadStatusFailed,
+		fresh.ID:    domain.UploadStatusUploading,
+		uploaded.ID: domain.UploadStatusUploaded,
+	} {
+		got, err := s.repo.Get(ctx, id)
+		s.Require().NoError(err)
+		s.Equal(want, got.UploadStatus)
+	}
+}
+
+// Отметка ставится и на удалённую запись, а повторная не сдвигает момент.
+func (s *RepositorySuite) TestMarkFilesRemoved() {
+	ctx := s.T().Context()
+
+	avatar := s.createUploadedAvatar(userAlice)
+	s.Require().NoError(s.repo.SoftDelete(ctx, avatar.ID))
+
+	s.Require().NoError(s.repo.MarkFilesRemoved(ctx, avatar.ID))
+
+	var first time.Time
+	s.Require().NoError(s.db.QueryRowContext(ctx,
+		`SELECT files_removed_at FROM avatars WHERE id = $1`, avatar.ID).Scan(&first))
+
+	s.Require().NoError(s.repo.MarkFilesRemoved(ctx, avatar.ID))
+
+	var second time.Time
+	s.Require().NoError(s.db.QueryRowContext(ctx,
+		`SELECT files_removed_at FROM avatars WHERE id = $1`, avatar.ID).Scan(&second))
+	s.True(first.Equal(second))
+
+	s.Require().ErrorIs(s.repo.MarkFilesRemoved(ctx, uuid.New()), domain.ErrNotFound)
+}
+
 // Отменённый контекст обязан прерывать запрос ошибкой, а не подвешивать его.
 func (s *RepositorySuite) TestCanceledContext() {
 	avatar := s.createAvatar(userAlice)
