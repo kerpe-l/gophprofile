@@ -21,6 +21,28 @@
 
 Напрямую server и worker не общаются — только через базу и брокер.
 
+```mermaid
+sequenceDiagram
+    participant C as Клиент
+    participant S as server
+    participant DB as PostgreSQL
+    participant S3 as MinIO
+    participant MQ as RabbitMQ
+    participant W as worker
+    C->>S: POST /api/v1/avatars
+    S->>DB: запись, uploading
+    S->>S3: оригинал
+    S->>DB: uploaded
+    S->>MQ: avatar.uploaded
+    S-->>C: 201, processing
+    MQ->>W: avatar.uploaded
+    W->>S3: оригинал
+    W->>S3: миниатюры 100×100, 300×300
+    W->>DB: completed
+```
+
+Ошибки обработки уходят на лестницу retry-очередей, после пяти попыток — в DLQ.
+
 ## Запуск
 
 Нужен Docker:
@@ -96,6 +118,9 @@ flowchart LR
 проставляет доверенный API-gateway, аутентификацией он не является, поэтому
 выставлять сервис в интернет напрямую нельзя.
 
+Частоту запросов ограничивает `RATE_LIMIT_RPS` (по умолчанию выключено): сверх
+лимита — 429 с `Retry-After`.
+
 ```sh
 curl -F file=@photo.jpg -H 'X-User-ID: alice' http://localhost:8080/api/v1/avatars
 curl -o avatar.jpg 'http://localhost:8080/api/v1/users/alice/avatar?size=100x100'
@@ -126,6 +151,13 @@ p95 задержки, рост DLQ, недоступность таргетов)
 - Prometheus — http://localhost:9090
 - Alertmanager — http://localhost:9093
 - Jaeger — http://localhost:16686
+
+Дашборды в Grafana:
+
+- **Service Overview** — сводка: RPS, доля 5xx, p95, DLQ, упавшие таргеты;
+- **HTTP RED** — rate, errors, latency по маршрутам;
+- **Resources** — пул БД, очереди и unacked, память, горутины;
+- **Business KPI** — загрузки, обработка и удаления по статусам, занятое хранилище.
 
 Экспорт трейсов включается переменной `OTEL_EXPORTER_OTLP_ENDPOINT`; пустое
 значение — трейсинг выключен, сервис работает без стека наблюдаемости.
