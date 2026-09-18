@@ -140,6 +140,19 @@ func run() error {
 		}
 
 		err = fmt.Errorf("serve metrics on %s: %w", cfg.Worker.MetricsAddr, merr)
+	case <-ctx.Done():
+		log.Info("shutdown signal received")
+
+		// Дренаж ограничен общим таймаутом поверх пределов на отдельные
+		// сообщения: под должен освободить узел раньше SIGKILL.
+		select {
+		case cerr := <-consumeErr:
+			if cerr != nil {
+				err = fmt.Errorf("consume events: %w", cerr)
+			}
+		case <-time.After(cfg.Worker.ShutdownTimeout):
+			err = fmt.Errorf("drain messages: not finished within %s", cfg.Worker.ShutdownTimeout)
+		}
 	}
 
 	cancel()
