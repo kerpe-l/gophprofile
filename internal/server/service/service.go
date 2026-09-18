@@ -47,6 +47,8 @@ type Repository interface {
 	// SoftDelete помечает аватар удалённым; повторное удаление —
 	// domain.ErrNotFound.
 	SoftDelete(ctx context.Context, id uuid.UUID) error
+	// MarkFilesRemoved отмечает, что файлы аватара убраны из хранилища.
+	MarkFilesRemoved(ctx context.Context, id uuid.UUID) error
 }
 
 // Storage — оригиналы и миниатюры в объектном хранилище. Файлы штатно убирает

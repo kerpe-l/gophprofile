@@ -1,0 +1,91 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: server
+  labels:
+    {{- include "gophprofile.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      app: server
+  template:
+    metadata:
+      labels:
+        app: server
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- if .Values.secrets.create }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- end }}
+    spec:
+      serviceAccountName: gophprofile
+      # preStop + HTTP_SHUTDOWN_TIMEOUT + flush спанов с запасом.
+      terminationGracePeriodSeconds: 30
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: server
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: server
+          image: {{ .Values.images.server.repository }}:{{ .Values.images.server.tag }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          securityContext:
+            {{- include "gophprofile.containerSecurityContext" . | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: gophprofile-config
+            - secretRef:
+                name: {{ include "gophprofile.secretName" . }}
+          env:
+            - name: GOMEMLIMIT
+              value: {{ .Values.server.gomemlimit | quote }}
+          # Под уходит из эндпоинтов Service асинхронно с SIGTERM: пауза даёт
+          # ingress-контроллеру перестать слать запросы до остановки приёма.
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: 5
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            # Не меньше checkTimeout хендлера: зависимость, ответившая за 2s,
+            # здорова по меркам приложения.
+            timeoutSeconds: 3
+          resources:
+            {{- toYaml .Values.server.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: server
+  labels:
+    app: server
+    {{- include "gophprofile.labels" . | nindent 4 }}
+spec:
+  selector:
+    app: server
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

@@ -18,9 +18,10 @@ import (
 
 // Префикс REST API и служебные пути.
 const (
-	apiPrefix   = "/api/v1"
-	healthPath  = "/health"
-	metricsPath = "/metrics"
+	apiPrefix    = "/api/v1"
+	healthPath   = "/health"
+	livenessPath = "/livez"
+	metricsPath  = "/metrics"
 )
 
 // Имена компонентов в ответе /health.
@@ -60,6 +61,9 @@ type Deps struct {
 	// Checks — проверяемые в /health зависимости по именам компонентов.
 	Checks map[string]Checker
 	HTTP   config.HTTP
+	// RateLimit ограничивает частоту запросов к /api и /web;
+	// нулевой RPS — без ограничителя.
+	RateLimit config.RateLimit
 	// MaxUploadBytes — предельный размер самого файла, без обвязки multipart.
 	MaxUploadBytes int64
 	// Web — страницы веб-интерфейса; без них раздел /web не монтируется.
@@ -106,12 +110,24 @@ func New(deps Deps) *chi.Mux {
 	r.Use(requestID, logging(deps.Log), recovering(deps.Log))
 
 	r.Get(healthPath, a.health)
+	r.Get(livenessPath, liveness)
 
 	if deps.MetricsHandler != nil {
 		r.Method(http.MethodGet, metricsPath, deps.MetricsHandler)
 	}
 
+	// Ограничитель частоты один на /api и /web: бакеты общие, служебные
+	// пути под него не попадают.
+	var limit func(http.Handler) http.Handler
+	if deps.RateLimit.RPS > 0 {
+		limit = rateLimiting(newLimiters(deps.RateLimit), deps.Log)
+	}
+
 	r.Route(apiPrefix, func(r chi.Router) {
+		if limit != nil {
+			r.Use(limit)
+		}
+
 		r.Group(func(r chi.Router) {
 			r.Use(uploading(deps)...)
 			r.Post("/avatars", a.upload)
@@ -131,7 +147,7 @@ func New(deps Deps) *chi.Mux {
 	})
 
 	if deps.Web != nil {
-		mountWeb(r, deps)
+		mountWeb(r, deps, limit)
 	}
 
 	return r
@@ -150,8 +166,12 @@ func uploading(deps Deps) []func(http.Handler) http.Handler {
 
 // mountWeb добавляет страницы веб-интерфейса. Форма загрузки получает те же
 // сроки и ограничитель тела, что и загрузка в API.
-func mountWeb(r chi.Router, deps Deps) {
+func mountWeb(r chi.Router, deps Deps, limit func(http.Handler) http.Handler) {
 	r.Group(func(r chi.Router) {
+		if limit != nil {
+			r.Use(limit)
+		}
+
 		r.Use(timeout(deps.HTTP.RequestTimeout))
 
 		r.Get(web.UploadPath, deps.Web.UploadForm)
@@ -160,6 +180,10 @@ func mountWeb(r chi.Router, deps Deps) {
 	})
 
 	r.Group(func(r chi.Router) {
+		if limit != nil {
+			r.Use(limit)
+		}
+
 		r.Use(uploading(deps)...)
 
 		r.Post(web.UploadPath, deps.Web.Upload)

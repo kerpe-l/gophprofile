@@ -27,7 +27,11 @@ func TestReconcileSpans(t *testing.T) {
 	t.Cleanup(func() { _ = provider.Shutdown(context.WithoutCancel(t.Context())) })
 
 	synctest.Test(t, func(t *testing.T) {
-		repo := &fakeRepo{passes: []pass{{avatars: []domain.Avatar{stuckAvatar()}}}}
+		repo := &fakeRepo{
+			failStaleCount: 3,
+			passes:         []pass{{avatars: []domain.Avatar{stuckAvatar()}}},
+			uncleaned:      []pass{{avatars: []domain.Avatar{stuckAvatar(), stuckAvatar()}}},
+		}
 		pub := &fakePublisher{}
 
 		stop := run(t, repo, pub)
@@ -39,10 +43,12 @@ func TestReconcileSpans(t *testing.T) {
 		require.Len(t, spans, 1)
 
 		span := spans[0]
-		assert.Equal(t, "reconcile stuck uploads", span.Name())
+		assert.Equal(t, "reconcile", span.Name())
 		// Спан корневой: у прохода по тикеру нет входящего контекста.
 		assert.False(t, span.Parent().IsValid())
+		assert.Contains(t, span.Attributes(), attribute.Int64("failed_uploads", 3))
 		assert.Contains(t, span.Attributes(), attribute.Int("republished", 1))
+		assert.Contains(t, span.Attributes(), attribute.Int("cleanups", 2))
 		assert.Equal(t, codes.Unset, span.Status().Code)
 	})
 }

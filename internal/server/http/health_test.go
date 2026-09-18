@@ -12,6 +12,24 @@ import (
 	serverhttp "github.com/kerpe-l/gophprofile/internal/server/http"
 )
 
+// Liveness-проба не зависит от состояния зависимостей: под с лежащей БД
+// не должен уходить в рестарт.
+func TestLiveness(t *testing.T) {
+	t.Parallel()
+
+	checks := map[string]serverhttp.Checker{
+		serverhttp.ComponentDB:     fakeChecker{err: errors.New("connection refused")},
+		serverhttp.ComponentS3:     fakeChecker{err: errors.New("connection refused")},
+		serverhttp.ComponentBroker: fakeChecker{err: errors.New("connection refused")},
+	}
+
+	router := newRouter(t, &fakeService{}, checks)
+
+	w := do(t, router, request(t, http.MethodGet, "/livez"))
+
+	require.Equal(t, http.StatusOK, w.Code)
+}
+
 func TestHealth(t *testing.T) {
 	t.Parallel()
 

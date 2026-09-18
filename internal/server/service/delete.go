@@ -62,47 +62,43 @@ func (s *Service) DeleteCurrent(ctx context.Context, userID, requesterID string)
 
 // remove сверяет владельца, помечает запись удалённой и заказывает воркеру
 // уборку файлов. Синхронно файлы не удаляются: запрос не должен ждать
-// хранилища.
+// хранилища. Сорвавшуюся уборку повторяет добор воркера, поэтому после
+// пометки записи удаление считается состоявшимся.
 func (s *Service) remove(ctx context.Context, avatar domain.Avatar, requesterID string) error {
 	if avatar.UserID != requesterID {
 		return fmt.Errorf("delete avatar %s: %w", avatar.ID, domain.ErrForbidden)
 	}
 
-	// Скрытая запись без события уборки — файлы, потерянные навсегда,
-	// поэтому ушедший клиент не должен обрывать оставшиеся шаги.
+	// Ушедший клиент не обрывает заказ уборки.
 	ctx = context.WithoutCancel(ctx)
 
 	if err := s.repo.SoftDelete(ctx, avatar.ID); err != nil {
 		return fmt.Errorf("delete avatar %s: %w", avatar.ID, err)
 	}
 
-	keys := storageKeys(avatar)
+	keys := avatar.StorageKeys()
 
-	// Переопубликовать событие некому: запись уже скрыта. При отказе брокера
-	// файлы удаляются синхронно.
 	if err := s.publisher.Publish(ctx, broker.NewDeleteEvent(avatar.ID, keys)); err != nil {
 		s.log.WarnContext(ctx, "publish delete event, falling back to direct removal",
 			slog.Any("error", err), slog.String("avatar_id", avatar.ID.String()))
 
-		if err := s.storage.DeleteMany(ctx, keys); err != nil {
-			return fmt.Errorf("delete files of avatar %s: %w", avatar.ID, err)
-		}
+		s.removeFiles(ctx, avatar.ID, keys)
 	}
 
 	return nil
 }
 
-// storageKeys собирает ключи оригинала и миниатюр всех размеров. Ключи
-// строятся из идентификатора: воркер мог записать миниатюру уже после
-// чтения записи.
-func storageKeys(avatar domain.Avatar) []string {
-	sizes := domain.ThumbnailSizes()
-	keys := make([]string, 0, len(sizes)+1)
-	keys = append(keys, avatar.S3Key)
+// removeFiles удаляет файлы аватара синхронно и отмечает уборку в базе.
+func (s *Service) removeFiles(ctx context.Context, id uuid.UUID, keys []string) {
+	if err := s.storage.DeleteMany(ctx, keys); err != nil {
+		s.log.WarnContext(ctx, "delete avatar files, left to reconciler",
+			slog.Any("error", err), slog.String("avatar_id", id.String()))
 
-	for _, size := range sizes {
-		keys = append(keys, domain.ThumbnailKey(avatar.ID, size))
+		return
 	}
 
-	return keys
+	if err := s.repo.MarkFilesRemoved(ctx, id); err != nil {
+		s.log.WarnContext(ctx, "mark avatar files removed",
+			slog.Any("error", err), slog.String("avatar_id", id.String()))
+	}
 }

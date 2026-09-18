@@ -55,15 +55,18 @@ func New(ctx context.Context, cfg config.DB) (*Repository, error) {
 		return nil, fmt.Errorf("connect to database: %w", err)
 	}
 
-	repo := &Repository{pool: pool, queryTimeout: cfg.QueryTimeout}
+	// На старте проверяется только соединение: схему применяет migrator,
+	// её появление дожидается readiness через Ping.
+	pingCtx, cancel := context.WithTimeout(ctx, cfg.QueryTimeout)
+	defer cancel()
 
-	if err := repo.Ping(ctx); err != nil {
+	if err := pool.Ping(pingCtx); err != nil {
 		pool.Close()
 
-		return nil, err
+		return nil, fmt.Errorf("ping database: %w", err)
 	}
 
-	return repo, nil
+	return &Repository{pool: pool, queryTimeout: cfg.QueryTimeout}, nil
 }
 
 // Close закрывает пул и ждёт возврата занятых соединений.
@@ -77,12 +80,13 @@ func (r *Repository) Stat() *pgxpool.Stat {
 	return r.pool.Stat()
 }
 
-// Ping проверяет, что база отвечает.
+// Ping проверяет, что база отвечает и схема применена: под с непрогнанными
+// миграциями не должен проходить readiness.
 func (r *Repository) Ping(ctx context.Context) error {
 	ctx, cancel := r.withDeadline(ctx)
 	defer cancel()
 
-	if err := r.pool.Ping(ctx); err != nil {
+	if _, err := r.pool.Exec(ctx, "SELECT 1 FROM avatars WHERE false"); err != nil {
 		return fmt.Errorf("ping database: %w", err)
 	}
 

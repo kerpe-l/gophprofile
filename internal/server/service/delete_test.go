@@ -24,6 +24,7 @@ func TestDelete(t *testing.T) {
 
 	assert.Equal(t, []uuid.UUID{d.repo.avatar.ID}, d.repo.deleted)
 	assert.Equal(t, []string{callGet, callDelete, callPublish}, d.log.list())
+	assert.Empty(t, d.repo.cleaned, "уборку отмечает воркер по событию")
 }
 
 func TestDeleteCurrent(t *testing.T) {
@@ -137,8 +138,8 @@ func TestDeleteRepositoryFails(t *testing.T) {
 	assert.Empty(t, d.publisher.events, "уборка файлов живого аватара не заказывается")
 }
 
-// При отказе публикации файлы удаляются синхронно: переопубликовать событие
-// удаления некому.
+// При отказе публикации файлы удаляются синхронно, и уборка отмечается
+// в базе — добору повторять её не нужно.
 func TestDeletePublishFails(t *testing.T) {
 	t.Parallel()
 
@@ -155,9 +156,11 @@ func TestDeletePublishFails(t *testing.T) {
 		domain.ThumbnailKey(d.repo.avatar.ID, domain.ThumbnailMedium),
 	}
 	assert.Equal(t, wantKeys, d.storage.deletedKeys)
+	assert.Equal(t, []uuid.UUID{d.repo.avatar.ID}, d.repo.cleaned)
 }
 
-// Брокер и хранилище недоступны разом: ошибка доходит до вызывающего.
+// Брокер и хранилище недоступны разом: запись уже скрыта, уборку доделает
+// добор, а отметка об уборке не ставится.
 func TestDeletePublishAndStorageFail(t *testing.T) {
 	t.Parallel()
 
@@ -167,7 +170,26 @@ func TestDeletePublishAndStorageFail(t *testing.T) {
 	d.storage.deleteManyErr = errors.New("storage is unavailable")
 	svc := newService(t, d)
 
-	require.ErrorIs(t, svc.Delete(t.Context(), d.repo.avatar.ID, testUserID), d.storage.deleteManyErr)
+	require.NoError(t, svc.Delete(t.Context(), d.repo.avatar.ID, testUserID))
+
+	assert.Equal(t, []uuid.UUID{d.repo.avatar.ID}, d.repo.deleted)
+	assert.Empty(t, d.repo.cleaned)
+}
+
+// Отметка об уборке не записалась: файлы уже удалены, повторная уборка
+// добором безвредна.
+func TestDeleteMarkFilesRemovedFails(t *testing.T) {
+	t.Parallel()
+
+	d := newDeps()
+	d.repo.avatar = storedAvatar()
+	d.publisher.err = errors.New("broker is unavailable")
+	d.repo.markErr = errors.New("database is unavailable")
+	svc := newService(t, d)
+
+	require.NoError(t, svc.Delete(t.Context(), d.repo.avatar.ID, testUserID))
+
+	assert.Equal(t, []string{callGet, callDelete, callPublish, callDeleteMany, callMarkFiles}, d.log.list())
 }
 
 // Событие уборки публикуется и на отменённом контексте запроса.

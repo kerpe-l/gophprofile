@@ -27,6 +27,7 @@ func TestUploadForm(t *testing.T) {
 	assert.Contains(t, body, `name="file"`)
 	assert.Contains(t, body, "1.0 KB")
 	assert.Contains(t, body, "/web/static/preview.js")
+	assert.NotContains(t, body, "readonly")
 }
 
 func TestUploadFormPrefilled(t *testing.T) {
@@ -207,6 +208,52 @@ func TestUploadIgnoresQueryUserID(t *testing.T) {
 	require.Equal(t, http.StatusSeeOther, w.Code)
 	assert.Equal(t, "/web/gallery/alice", w.Header().Get("Location"))
 	assert.Equal(t, testUserID, svc.uploadInput.UserID)
+}
+
+// Владельца проставил gateway: поле формы подменить его не может.
+func TestUploadTakesUserIDFromGateway(t *testing.T) {
+	t.Parallel()
+
+	svc := &fakeService{avatar: completedAvatar()}
+
+	r := uploadRequest(t, userField("mallory"), fileField("portrait.png", 64))
+	r.Header.Set("X-User-ID", testUserID)
+
+	w := do(t, newRouter(t, svc), r)
+
+	require.Equal(t, http.StatusSeeOther, w.Code)
+	assert.Equal(t, "/web/gallery/alice", w.Header().Get("Location"))
+	assert.Equal(t, testUserID, svc.uploadInput.UserID)
+}
+
+func TestUploadRejectsLongGatewayUserID(t *testing.T) {
+	t.Parallel()
+
+	svc := &fakeService{}
+
+	r := uploadRequest(t, userField(testUserID), fileField("portrait.png", 64))
+	r.Header.Set("X-User-ID", strings.Repeat("a", 256))
+
+	w := do(t, newRouter(t, svc), r)
+
+	require.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Empty(t, svc.uploadInput.UserID)
+}
+
+// С заголовком gateway форма показывает владельца только для чтения,
+// и query его не перекрывает.
+func TestUploadFormFixedByGateway(t *testing.T) {
+	t.Parallel()
+
+	r := get(t, web.UploadPath+"?user_id=mallory")
+	r.Header.Set("X-User-ID", testUserID)
+
+	w := do(t, newRouter(t, &fakeService{}), r)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), `value="alice"`)
+	assert.Contains(t, w.Body.String(), "readonly")
+	assert.NotContains(t, w.Body.String(), "mallory")
 }
 
 // Заголовок формы не разбирается как multipart: до сервиса запрос не доходит.

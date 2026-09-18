@@ -1,0 +1,14 @@
+GophProfile установлен в namespace {{ .Release.Namespace }}.
+
+{{ if .Values.ingress.enabled -}}
+Веб-интерфейс:
+  http://{{ .Values.ingress.host }}/web/upload
+
+Проверка (эндпоинт отдаёт заглушку даже без загруженных аватаров):
+  curl -I http://{{ .Values.ingress.host }}/api/v1/users/anyone/avatar
+
+{{ end -}}
+Namespace должен нести лейблы Pod Security Standards (chart ими не управляет):
+  kubectl label namespace {{ .Release.Namespace }} \
+    pod-security.kubernetes.io/enforce=restricted \
+    pod-security.kubernetes.io/warn=restricted

@@ -59,6 +59,27 @@ const (
 		ORDER BY updated_at
 		LIMIT $4`
 
+	// Файлы, которые ещё надо убрать из хранилища. Условие повторяет
+	// частичный индекс idx_avatars_uncleaned дословно, вместе с литералом
+	// статуса.
+	selectUncleanedQuery = `
+		SELECT ` + avatarColumns + `
+		FROM avatars
+		WHERE files_removed_at IS NULL
+		  AND (deleted_at IS NOT NULL OR upload_status = 'failed')
+		  AND updated_at < $1
+		ORDER BY updated_at
+		LIMIT $2`
+
+	failStaleUploadsQuery = `
+		UPDATE avatars SET upload_status = $1, updated_at = NOW()
+		WHERE upload_status = $2 AND deleted_at IS NULL AND updated_at < $3`
+
+	// Первая отметка сохраняется: повторная уборка момент не сдвигает.
+	markFilesRemovedQuery = `
+		UPDATE avatars SET files_removed_at = COALESCE(files_removed_at, NOW())
+		WHERE id = $1`
+
 	// Переводы статусов отбирают строку ещё и по текущему статусу: список
 	// разрешённых исходных статусов приходит параметром из домена. Проверять
 	// его отдельным чтением перед UPDATE нельзя — между чтением и записью
@@ -152,6 +173,44 @@ func (r *Repository) SelectStuck(
 
 	return r.queryMany(ctx, "select stuck avatars", selectStuckQuery,
 		domain.UploadStatusUploaded, domain.ProcessingStatusPending, before, limit)
+}
+
+// SelectUncleaned перебирает удалённые аватары и сорвавшиеся загрузки,
+// файлы которых ещё не убраны из хранилища, а запись не менялась до момента
+// before. limit обязан быть положительным.
+func (r *Repository) SelectUncleaned(
+	ctx context.Context, before time.Time, limit int,
+) iter.Seq2[domain.Avatar, error] {
+	if limit <= 0 {
+		return failedSeq(fmt.Errorf("select uncleaned avatars: limit %d is not positive", limit))
+	}
+
+	return r.queryMany(ctx, "select uncleaned avatars", selectUncleanedQuery, before, limit)
+}
+
+// FailStaleUploads переводит в failed загрузки, застрявшие в uploading
+// с момента before, и возвращает их число.
+func (r *Repository) FailStaleUploads(ctx context.Context, before time.Time) (int64, error) {
+	ctx, cancel := r.withDeadline(ctx)
+	defer cancel()
+
+	tag, err := r.pool.Exec(ctx, failStaleUploadsQuery,
+		domain.UploadStatusFailed, domain.UploadStatusUploading, before)
+	if err != nil {
+		return 0, fmt.Errorf("fail stale uploads: %w", err)
+	}
+
+	return tag.RowsAffected(), nil
+}
+
+// MarkFilesRemoved отмечает, что файлы аватара убраны из хранилища. Работает
+// и для удалённой записи; отсутствие записи — domain.ErrNotFound.
+func (r *Repository) MarkFilesRemoved(ctx context.Context, id uuid.UUID) error {
+	if err := r.exec(ctx, markFilesRemovedQuery, id); err != nil {
+		return fmt.Errorf("mark files of avatar %s removed: %w", id, err)
+	}
+
+	return nil
 }
 
 // SetUploadStatus переводит запись в новое состояние загрузки оригинала.

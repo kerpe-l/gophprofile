@@ -32,6 +32,9 @@ const (
 	envHTTPShutdownTimeout   = "HTTP_SHUTDOWN_TIMEOUT"
 	envHTTPRequestTimeout    = "HTTP_REQUEST_TIMEOUT"
 
+	envRateLimitRPS   = "RATE_LIMIT_RPS"
+	envRateLimitBurst = "RATE_LIMIT_BURST"
+
 	envDatabaseDSN    = "DATABASE_DSN"
 	envDBMaxConns     = "DB_MAX_CONNS"
 	envDBQueryTimeout = "DB_QUERY_TIMEOUT"
@@ -62,6 +65,7 @@ const (
 	envWorkerReconcileBatch    = "WORKER_RECONCILE_BATCH"
 	envWorkerDecodeConcurrency = "WORKER_DECODE_CONCURRENCY"
 	envWorkerMetricsAddr       = "WORKER_METRICS_ADDR"
+	envWorkerShutdownTimeout   = "WORKER_SHUTDOWN_TIMEOUT"
 )
 
 // Окружения, в которых запускается сервис: от них зависит формат логов —
@@ -113,6 +117,12 @@ const (
 	// Пиковую память воркера задаёт это число, а не prefetch.
 	defaultWorkerDecodeConcurrency = 2
 	defaultWorkerMetricsAddr       = ":9090"
+	// Дренаж при завершении: дообработка взятых сообщений плюс запас
+	// на перекладывание в очереди повторов.
+	defaultWorkerShutdownTimeout = 75 * time.Second
+
+	defaultRateLimitRPS   = 0.0
+	defaultRateLimitBurst = 0
 )
 
 // maxJPEGQuality — верхняя граница качества JPEG в пакете image/jpeg.
@@ -121,14 +131,15 @@ const maxJPEGQuality = 100
 // Config — конфигурация сервиса целиком. HTTP нужен только серверу,
 // Worker — только воркеру; остальные секции общие.
 type Config struct {
-	App    App
-	HTTP   HTTP
-	DB     DB
-	S3     S3
-	AMQP   AMQP
-	Otel   Otel
-	Image  Image
-	Worker Worker
+	App       App
+	HTTP      HTTP
+	RateLimit RateLimit
+	DB        DB
+	S3        S3
+	AMQP      AMQP
+	Otel      Otel
+	Image     Image
+	Worker    Worker
 }
 
 // App — общие настройки приложения.
@@ -152,6 +163,14 @@ type HTTP struct {
 	ShutdownTimeout time.Duration
 	// RequestTimeout — предел на обработку запроса, кроме загрузки.
 	RequestTimeout time.Duration
+}
+
+// RateLimit — ограничение частоты запросов к API.
+type RateLimit struct {
+	// RPS — запросов в секунду на ключ; 0 выключает ограничитель.
+	RPS float64
+	// Burst — размер всплеска; 0 — двукратный RPS, минимум 1.
+	Burst int
 }
 
 // DB — доступ к PostgreSQL.
@@ -215,6 +234,9 @@ type Worker struct {
 	DecodeConcurrency int
 	// MetricsAddr — адрес листенера /metrics воркера.
 	MetricsAddr string
+	// ShutdownTimeout — общий предел дренажа при завершении, поверх
+	// ProcessTimeout отдельных сообщений.
+	ShutdownTimeout time.Duration
 }
 
 // getenv — источник переменных окружения, второе значение — объявлена ли переменная.
@@ -247,6 +269,7 @@ func loadServer(env getenv) (*Config, error) {
 	err = errors.Join(
 		cfg.App.validate(),
 		cfg.HTTP.validate(),
+		cfg.RateLimit.validate(),
 		cfg.DB.validate(),
 		cfg.S3.validate(),
 		cfg.AMQP.validate(),
@@ -320,6 +343,10 @@ func load(env getenv) (*Config, error) {
 			ShutdownTimeout:   r.duration(envHTTPShutdownTimeout, defaultHTTPShutdownTimeout),
 			RequestTimeout:    r.duration(envHTTPRequestTimeout, defaultHTTPRequestTimeout),
 		},
+		RateLimit: RateLimit{
+			RPS:   r.float(envRateLimitRPS, defaultRateLimitRPS),
+			Burst: r.integer(envRateLimitBurst, defaultRateLimitBurst),
+		},
 		DB: DB{
 			DSN:          r.str(envDatabaseDSN, ""),
 			MaxConns:     r.integer(envDBMaxConns, defaultDBMaxConns),
@@ -356,6 +383,7 @@ func load(env getenv) (*Config, error) {
 			ReconcileBatch:    r.integer(envWorkerReconcileBatch, defaultWorkerReconcileBatch),
 			DecodeConcurrency: r.integer(envWorkerDecodeConcurrency, defaultWorkerDecodeConcurrency),
 			MetricsAddr:       r.str(envWorkerMetricsAddr, defaultWorkerMetricsAddr),
+			ShutdownTimeout:   r.duration(envWorkerShutdownTimeout, defaultWorkerShutdownTimeout),
 		},
 	}
 
@@ -395,6 +423,19 @@ func (c HTTP) validate() error {
 		positiveDuration(envHTTPShutdownTimeout, c.ShutdownTimeout),
 		positiveDuration(envHTTPRequestTimeout, c.RequestTimeout),
 	)
+}
+
+func (c RateLimit) validate() error {
+	// ParseFloat принимает "NaN", а сравнение с нулём для NaN ложно.
+	if math.IsNaN(c.RPS) || c.RPS < 0 {
+		return fmt.Errorf("%s must be zero or positive", envRateLimitRPS)
+	}
+
+	if c.Burst < 0 {
+		return fmt.Errorf("%s must be zero or positive", envRateLimitBurst)
+	}
+
+	return nil
 }
 
 func (c DB) validate() error {
@@ -455,6 +496,7 @@ func (c Worker) validate() error {
 		positive(envWorkerReconcileBatch, int64(c.ReconcileBatch)),
 		positive(envWorkerDecodeConcurrency, int64(c.DecodeConcurrency)),
 		required(envWorkerMetricsAddr, c.MetricsAddr),
+		positiveDuration(envWorkerShutdownTimeout, c.ShutdownTimeout),
 	)
 }
 

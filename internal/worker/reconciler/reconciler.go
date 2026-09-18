@@ -1,12 +1,12 @@
-// Package reconciler добирает загрузки, событие о которых не дошло до брокера.
-//
-// Процесс, умерший между переводом записи в uploaded и публикацией события,
-// оставляет аватар необработанным навсегда. Такие записи — uploaded и pending,
-// не менявшиеся дольше отсечки — перебираются по тикеру и публикуются заново.
+// Package reconciler по тикеру доделывает то, что сорвалось между базой,
+// хранилищем и брокером: переводит зависшие uploading в failed, заново
+// публикует события загрузки для uploaded + pending и события удаления для
+// записей с неубранными файлами. Шаги прохода независимы.
 package reconciler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"iter"
 	"log/slog"
@@ -29,6 +29,13 @@ type Repository interface {
 	// SelectStuck перебирает не более limit загруженных, но не обработанных
 	// аватаров, не менявшихся до момента before.
 	SelectStuck(ctx context.Context, before time.Time, limit int) iter.Seq2[domain.Avatar, error]
+	// SelectUncleaned перебирает не более limit удалённых аватаров
+	// и сорвавшихся загрузок с неубранными файлами, не менявшихся до момента
+	// before.
+	SelectUncleaned(ctx context.Context, before time.Time, limit int) iter.Seq2[domain.Avatar, error]
+	// FailStaleUploads переводит в failed загрузки, застрявшие в uploading
+	// с момента before, и возвращает их число.
+	FailStaleUploads(ctx context.Context, before time.Time) (int64, error)
 }
 
 // Publisher — публикация событий обработки.
@@ -41,15 +48,15 @@ type Publisher interface {
 type Config struct {
 	// Interval — период между проходами.
 	Interval time.Duration
-	// StuckAfter должен быть заметно больше времени штатной обработки, иначе
-	// добор дублирует события, которые воркер разбирает прямо сейчас.
+	// StuckAfter должен быть заметно больше времени штатной загрузки
+	// и обработки, иначе добор вмешивается в то, что идёт прямо сейчас.
 	StuckAfter time.Duration
 	// Batch — сколько записей разбирается за проход; без предела выборка
 	// вычитает таблицу целиком.
 	Batch int
 }
 
-// Reconciler переопубликовывает события для зависших загрузок.
+// Reconciler доделывает сорвавшиеся загрузки, обработки и уборки.
 type Reconciler struct {
 	repo      Repository
 	publisher Publisher
@@ -74,44 +81,90 @@ func (r *Reconciler) Run(ctx context.Context) {
 			return
 		case <-ticker.C:
 			if err := r.reconcile(ctx); err != nil {
-				r.log.ErrorContext(ctx, "reconcile stuck uploads", slog.Any("error", err))
+				r.log.ErrorContext(ctx, "reconcile", slog.Any("error", err))
 			}
 		}
 	}
 }
 
-// reconcile публикует события для зависших записей одного прохода. Перебор
-// прекращается на первой ошибке — остальное подберёт следующий тик.
+// reconcile выполняет один проход. Перебор внутри шага прекращается на первой
+// ошибке — остальное подберёт следующий тик.
 //
 // Спан прохода корневой: входящего контекста трейса у тикера нет. Через
 // публикацию он связывает обработку переопубликованных событий с проходом.
 func (r *Reconciler) reconcile(ctx context.Context) error {
-	ctx, span := r.tracer.Start(ctx, "reconcile stuck uploads")
+	ctx, span := r.tracer.Start(ctx, "reconcile")
 	defer span.End()
 
 	before := time.Now().Add(-r.cfg.StuckAfter)
 
-	republished := 0
+	failed, failErr := r.repo.FailStaleUploads(ctx, before)
+	if failErr != nil {
+		failErr = fmt.Errorf("fail stale uploads: %w", failErr)
+	}
+
+	republished, republishErr := r.republishUploads(ctx, before)
+	cleanups, cleanupErr := r.republishCleanups(ctx, before)
+
+	span.SetAttributes(
+		attribute.Int64("failed_uploads", failed),
+		attribute.Int("republished", republished),
+		attribute.Int("cleanups", cleanups),
+	)
+
+	if failed > 0 || republished > 0 || cleanups > 0 {
+		r.log.InfoContext(ctx, "reconciled",
+			slog.Int64("failed_uploads", failed),
+			slog.Int("republished", republished),
+			slog.Int("cleanups", cleanups),
+		)
+	}
+
+	if err := errors.Join(failErr, republishErr, cleanupErr); err != nil {
+		return observability.SpanError(span, err)
+	}
+
+	return nil
+}
+
+// republishUploads публикует заново события загрузки, не дошедшие до брокера.
+func (r *Reconciler) republishUploads(ctx context.Context, before time.Time) (int, error) {
+	published := 0
 
 	for avatar, err := range r.repo.SelectStuck(ctx, before, r.cfg.Batch) {
 		if err != nil {
-			return observability.SpanError(span, fmt.Errorf("select stuck uploads: %w", err))
+			return published, fmt.Errorf("select stuck uploads: %w", err)
 		}
 
 		// Идентификатор сообщения каждый раз новый: дедупликации по нему нет.
 		event := broker.NewUploadEvent(avatar.ID, avatar.UserID, avatar.S3Key)
 		if err := r.publisher.Publish(ctx, event); err != nil {
-			return observability.SpanError(span, fmt.Errorf("republish upload event of avatar %s: %w", avatar.ID, err))
+			return published, fmt.Errorf("republish upload event of avatar %s: %w", avatar.ID, err)
 		}
 
-		republished++
+		published++
 	}
 
-	span.SetAttributes(attribute.Int("republished", republished))
+	return published, nil
+}
 
-	if republished > 0 {
-		r.log.InfoContext(ctx, "stuck uploads republished", slog.Int("count", republished))
+// republishCleanups публикует события удаления для записей, чьи файлы
+// не убраны: событие не дошло, уборка сорвалась или загрузка оборвалась.
+func (r *Reconciler) republishCleanups(ctx context.Context, before time.Time) (int, error) {
+	published := 0
+
+	for avatar, err := range r.repo.SelectUncleaned(ctx, before, r.cfg.Batch) {
+		if err != nil {
+			return published, fmt.Errorf("select uncleaned avatars: %w", err)
+		}
+
+		event := broker.NewDeleteEvent(avatar.ID, avatar.StorageKeys())
+		if err := r.publisher.Publish(ctx, event); err != nil {
+			return published, fmt.Errorf("publish delete event of avatar %s: %w", avatar.ID, err)
+		}
+
+		published++
 	}
 
-	return nil
+	return published, nil
 }

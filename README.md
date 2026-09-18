@@ -15,11 +15,33 @@
 - **server** — REST API: пишет метаданные в PostgreSQL, кладёт оригинал в MinIO,
   публикует событие в RabbitMQ.
 - **worker** — потребляет события: создаёт миниатюры, убирает файлы удалённых
-  аватаров, переопубликовывает зависшие загрузки.
+  аватаров; по тикеру доделывает зависшие загрузки и сорвавшуюся уборку.
 - **migrator** — применяет миграции и выходит. Server и worker DDL не выполняют:
   при параллельном старте они гонялись бы друг с другом за блокировки.
 
 Напрямую server и worker не общаются — только через базу и брокер.
+
+```mermaid
+sequenceDiagram
+    participant C as Клиент
+    participant S as server
+    participant DB as PostgreSQL
+    participant S3 as MinIO
+    participant MQ as RabbitMQ
+    participant W as worker
+    C->>S: POST /api/v1/avatars
+    S->>DB: запись, uploading
+    S->>S3: оригинал
+    S->>DB: uploaded
+    S->>MQ: avatar.uploaded
+    S-->>C: 201, processing
+    MQ->>W: avatar.uploaded
+    W->>S3: оригинал
+    W->>S3: миниатюры 100×100, 300×300
+    W->>DB: completed
+```
+
+Ошибки обработки уходят на лестницу retry-очередей, после пяти попыток — в DLQ.
 
 ## Запуск
 
@@ -42,7 +64,40 @@ Compose поднимает PostgreSQL, MinIO и RabbitMQ, прогоняет м�
 на старте. Compose файл `.env` подхватывает сам; бинарники читают только окружение
 процесса, поэтому при запуске напрямую переменные нужно экспортировать.
 
+## Деплой в Kubernetes
+
+Helm Chart [deploy/charts/gophprofile](deploy/charts/gophprofile):
+server под HPA, worker, миграции hook'ом, NetworkPolicy и Pod Security
+Standards `restricted`. В dev-режиме chart поднимает PostgreSQL, MinIO
+и RabbitMQ минимальными StatefulSet'ами; в prod инфраструктура внешняя.
+Команды установки и values окружений — в
+[README chart'а](deploy/charts/gophprofile/README.md). Compose остаётся
+способом локального запуска без кластера.
+
+```mermaid
+flowchart LR
+    client((Клиент)) --> ingress[Ingress]
+    subgraph ns["namespace gophprofile"]
+        ingress --> server["Deployment server (HPA 2–10)"]
+        server --> db[("StatefulSet PostgreSQL")]
+        server --> s3[("StatefulSet MinIO")]
+        server --> mq[["StatefulSet RabbitMQ"]]
+        mq --> worker["Deployment worker"]
+        worker --> db
+        worker --> s3
+        migrations["Job migrations (hook)"] --> db
+        init["Job minio-init (hook)"] --> s3
+    end
+    prom["Prometheus (ServiceMonitor)"] -.->|скрейп| server
+    prom -.->|скрейп| worker
+```
+
+Сетевые границы: default deny в обе стороны, разрешены только показанные
+стрелки, ingress от ingress-контроллера и Prometheus, DNS.
+
 ## API
+
+Формальное описание — [api/openapi.yaml](api/openapi.yaml).
 
 | Маршрут | Назначение |
 |---|---|
@@ -57,11 +112,15 @@ Compose поднимает PostgreSQL, MinIO и RabbitMQ, прогоняет м�
 
 Эндпоинты изображений принимают `?size=100x100|300x300|original` (по умолчанию
 оригинал). Миниатюры всегда в JPEG; пока миниатюра не готова, вместо неё отдаётся
-оригинал с коротким кешем.
+оригинал с коротким кешем. Актуальный аватар пользователя кешируется не дольше
+5 минут, конкретный аватар по идентификатору — сутки.
 
 `GET`-эндпоинты публичны. `POST` и `DELETE` требуют заголовок `X-User-ID` — его
 проставляет доверенный API-gateway, аутентификацией он не является, поэтому
 выставлять сервис в интернет напрямую нельзя.
+
+Частоту запросов ограничивает `RATE_LIMIT_RPS` (по умолчанию выключено): сверх
+лимита — 429 с `Retry-After`.
 
 ```sh
 curl -F file=@photo.jpg -H 'X-User-ID: alice' http://localhost:8080/api/v1/avatars
@@ -77,7 +136,8 @@ curl -o avatar.jpg 'http://localhost:8080/api/v1/users/alice/avatar?size=100x100
 | `GET /web/gallery/{user_id}` | галерея пользователя |
 
 Страницы собраны на `html/template`, шаблоны и статика встроены в бинарник,
-JS-сборки нет. Владелец задаётся полем формы.
+JS-сборки нет. Владелец берётся из `X-User-ID`, а без заголовка — из поля формы:
+это демо-режим, обычным пользователям `/web` без gateway не отдавать.
 
 ## Наблюдаемость
 
@@ -93,6 +153,13 @@ p95 задержки, рост DLQ, недоступность таргетов)
 - Prometheus — http://localhost:9090
 - Alertmanager — http://localhost:9093
 - Jaeger — http://localhost:16686
+
+Дашборды в Grafana:
+
+- **Service Overview** — сводка: RPS, доля 5xx, p95, DLQ, упавшие таргеты;
+- **HTTP RED** — rate, errors, latency по маршрутам;
+- **Resources** — пул БД, очереди и unacked, память, горутины;
+- **Business KPI** — загрузки, обработка и удаления по статусам, занятое хранилище.
 
 Экспорт трейсов включается переменной `OTEL_EXPORTER_OTLP_ENDPOINT`; пустое
 значение — трейсинг выключен, сервис работает без стека наблюдаемости.

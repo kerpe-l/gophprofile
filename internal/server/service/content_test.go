@@ -156,22 +156,56 @@ func TestAvatarContentNotFound(t *testing.T) {
 	}
 }
 
+// Актуальный аватар меняется по тому же адресу, поэтому сутки кеша готового
+// изображения здесь урезаются до минут; короткий кеш ещё не готовой
+// миниатюры остаётся коротким.
 func TestUserAvatarContent(t *testing.T) {
 	t.Parallel()
 
-	d := newDeps()
-	d.repo.avatar = storedAvatar()
-	svc := newService(t, d)
+	pending := storedAvatar()
+	pending.ThumbnailKeys = nil
+	pending.ProcessingStatus = domain.ProcessingStatusPending
 
-	content, err := svc.UserAvatarContent(t.Context(), testUserID, domain.ThumbnailSmall)
-	require.NoError(t, err)
+	tests := []struct {
+		name       string
+		avatar     domain.Avatar
+		wantKey    func(domain.Avatar) string
+		wantMaxAge time.Duration
+	}{
+		{
+			name:       "ready thumbnail",
+			avatar:     storedAvatar(),
+			wantKey:    func(a domain.Avatar) string { return domain.ThumbnailKey(a.ID, domain.ThumbnailSmall) },
+			wantMaxAge: 5 * time.Minute,
+		},
+		{
+			name:       "thumbnail is not ready yet",
+			avatar:     pending,
+			wantKey:    func(a domain.Avatar) string { return a.S3Key },
+			wantMaxAge: time.Minute,
+		},
+	}
 
-	defer func() {
-		assert.NoError(t, content.Body.Close())
-	}()
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-	assert.False(t, content.IsDefault)
-	assert.Equal(t, []string{domain.ThumbnailKey(d.repo.avatar.ID, domain.ThumbnailSmall)}, d.storage.getKeys)
+			d := newDeps()
+			d.repo.avatar = tc.avatar
+			svc := newService(t, d)
+
+			content, err := svc.UserAvatarContent(t.Context(), testUserID, domain.ThumbnailSmall)
+			require.NoError(t, err)
+
+			defer func() {
+				assert.NoError(t, content.Body.Close())
+			}()
+
+			assert.False(t, content.IsDefault)
+			assert.Equal(t, []string{tc.wantKey(tc.avatar)}, d.storage.getKeys)
+			assert.Equal(t, tc.wantMaxAge, content.MaxAge)
+		})
+	}
 }
 
 // Незавершённая загрузка для стороннего клиента не отличается от отсутствия

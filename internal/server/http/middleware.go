@@ -74,7 +74,13 @@ func validRequestID(id string) bool {
 	return true
 }
 
-// tracing открывает серверный спан на каждый запрос, кроме /health,
+// servicePath сообщает, служебный ли это путь: пробы и scrape метрик
+// не трейсятся, не попадают в RED-метрики и логируются на Debug.
+func servicePath(path string) bool {
+	return path == healthPath || path == livenessPath || path == metricsPath
+}
+
+// tracing открывает серверный спан на каждый запрос, кроме служебных путей,
 // и после роутинга называет его route pattern'ом chi: сырой путь дал бы
 // отдельное имя спана на каждое значение {avatar_id}.
 func tracing(next http.Handler) http.Handler {
@@ -90,16 +96,16 @@ func tracing(next http.Handler) http.Handler {
 
 	return otelhttp.NewHandler(renaming, "http.server",
 		otelhttp.WithFilter(func(r *http.Request) bool {
-			return r.URL.Path != healthPath && r.URL.Path != metricsPath
+			return !servicePath(r.URL.Path)
 		}))
 }
 
 // measuring считает RED-метрики запроса. Route pattern берётся после роутинга,
-// как и имя спана в tracing; health и scrape метрик не измеряются.
+// как и имя спана в tracing; служебные пути не измеряются.
 func measuring(m *metrics.HTTP) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path == healthPath || r.URL.Path == metricsPath {
+			if servicePath(r.URL.Path) {
 				next.ServeHTTP(w, r)
 
 				return
@@ -129,9 +135,10 @@ func logging(log *slog.Logger) func(http.Handler) http.Handler {
 
 			next.ServeHTTP(rec, r)
 
-			// Периодический scrape метрик пишется на Debug.
+			// Периодические scrape метрик и пробы пишутся на Debug;
+			// отказ пробы всё равно поднимется до Error по коду ответа.
 			level := slog.LevelInfo
-			if r.URL.Path == metricsPath {
+			if servicePath(r.URL.Path) {
 				level = slog.LevelDebug
 			}
 

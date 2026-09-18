@@ -20,4 +20,7 @@ var (
 	ErrImageTooBig = errors.New("image is too large to process")
 	// ErrUnsupportedSize — запрошен размер, в котором миниатюры не создаются.
 	ErrUnsupportedSize = errors.New("unsupported size")
+	// ErrUnavailable — зависимость недоступна, вызов отклонён без обращения
+	// к ней.
+	ErrUnavailable = errors.New("service temporarily unavailable")
 )

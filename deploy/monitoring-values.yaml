@@ -1,0 +1,45 @@
+# Values для kube-prometheus-stack: оператор, Prometheus, Alertmanager, Grafana
+# с дашбордами кластера и приложения. Логи и трейсы — в docker compose.
+# helm install monitoring prometheus-community/kube-prometheus-stack \
+#   -n monitoring --create-namespace -f deploy/monitoring-values.yaml
+grafana:
+  # Дашборды приложения — из ConfigMap'ов с лейблом grafana_dashboard в любом namespace.
+  sidecar:
+    dashboards:
+      searchNamespace: ALL
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 512Mi
+  livenessProbe:
+    initialDelaySeconds: 300
+alertmanager:
+  alertmanagerSpec:
+    resources:
+      requests:
+        cpu: 10m
+        memory: 32Mi
+      limits:
+        memory: 128Mi
+# Компоненты control plane k3s наружу метрик не отдают.
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeProxy:
+  enabled: false
+kubeEtcd:
+  enabled: false
+prometheus:
+  prometheusSpec:
+    serviceMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    retention: 24h
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        memory: 1Gi

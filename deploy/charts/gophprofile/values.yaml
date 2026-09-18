@@ -1,0 +1,117 @@
+# Общие дефолты. Окружение накладывается файлом values-dev.yaml или values-prod.yaml.
+
+images:
+  server:
+    repository: gophprofile-server
+    tag: latest
+  worker:
+    repository: gophprofile-worker
+    tag: latest
+  migrator:
+    repository: gophprofile-migrator
+    tag: latest
+  pullPolicy: IfNotPresent
+
+config:
+  appEnv: local
+  logLevel: info
+  logFormat: json
+  s3Bucket: avatars
+  # Адрес S3 вне кластера; при включённом minio по умолчанию minio:9000.
+  s3Endpoint: ""
+  s3UseSSL: false
+  # Регион подписи S3-запросов; пустое значение — дефолт приложения.
+  s3Region: ""
+  # host:port OTLP-коллектора; пустое значение выключает трейсинг.
+  otlpEndpoint: ""
+  otlpInsecure: true
+  # Запросов в секунду на пользователя (X-User-ID, без него — IP); 0 выключает.
+  rateLimitRPS: 20
+  # 0 — двукратный RPS.
+  rateLimitBurst: 0
+
+secrets:
+  # Создать Secret из values (dev). Иначе обязателен existingSecret
+  # с ключами DATABASE_DSN, S3_ACCESS_KEY, S3_SECRET_KEY, AMQP_URL.
+  create: false
+  values: {}
+  existingSecret: ""
+
+server:
+  gomemlimit: 400MiB
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  # Только CPU: GOMEMLIMIT держит heap у своего предела независимо от нагрузки.
+  hpa:
+    minReplicas: 2
+    maxReplicas: 10
+    cpuUtilization: 70
+  pdb:
+    minAvailable: 1
+
+worker:
+  replicas: 1
+  gomemlimit: 400MiB
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+ingress:
+  enabled: true
+  host: avatars.localhost
+  className: ""
+  annotations: {}
+
+# Ресурсы Prometheus Operator; без его CRD установка падает.
+serviceMonitor:
+  enabled: false
+  # Лейблы, по которым serviceMonitorSelector оператора выбирает монитор.
+  labels: {}
+prometheusRule:
+  enabled: false
+  # Лейблы, по которым ruleSelector оператора выбирает правила.
+  labels: {}
+# ConfigMap с дашбордами для sidecar'а Grafana.
+dashboards:
+  enabled: false
+  labels:
+    grafana_dashboard: "1"
+
+networkPolicy:
+  enabled: true
+  ingressController:
+    namespace: kube-system
+    podLabels:
+      app.kubernetes.io/name: traefik
+  prometheus:
+    namespace: monitoring
+    podLabels:
+      app.kubernetes.io/name: prometheus
+  # Egress к адресам вне кластера: инфраструктура при выключенных
+  # postgres/minio/rabbitmq и OTLP-коллектор. 
+  externalEgress:
+    cidr: ""
+    ports:
+      postgres: 5432
+      s3: 9000
+      amqp: 5672
+
+# Инфраструктура dev-режима; в prod выключена, адреса приходят из values и Secret.
+postgres:
+  enabled: false
+  storage: 1Gi
+minio:
+  enabled: false
+  storage: 2Gi
+rabbitmq:
+  enabled: false
+  storage: 1Gi

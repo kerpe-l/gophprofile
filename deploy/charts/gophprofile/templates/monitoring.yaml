@@ -1,0 +1,28 @@
+{{- if .Values.prometheusRule.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: gophprofile
+  labels:
+    {{- include "gophprofile.labels" . | nindent 4 }}
+    {{- with .Values.prometheusRule.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  {{- .Files.Get "files/alerts.yml" | nindent 2 }}
+{{- end }}
+{{- if .Values.dashboards.enabled }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gophprofile-dashboards
+  labels:
+    {{- include "gophprofile.labels" . | nindent 4 }}
+    {{- toYaml .Values.dashboards.labels | nindent 4 }}
+data:
+  {{- range $path, $_ := .Files.Glob "files/dashboards/*.json" }}
+  {{ base $path }}: |-
+    {{- $.Files.Get $path | nindent 4 }}
+  {{- end }}
+{{- end }}

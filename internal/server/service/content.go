@@ -26,6 +26,9 @@ const (
 	cachePending = time.Minute
 	// cachePlaceholder — заглушка: обе подмены временные и живут минуты.
 	cachePlaceholder = 5 * time.Minute
+	// cacheCurrent — предел для актуального аватара пользователя: по тому же
+	// адресу после новой загрузки или удаления отдаётся другое изображение.
+	cacheCurrent = 5 * time.Minute
 )
 
 // Content — изображение, готовое к отдаче клиенту, вместе с заголовками,
@@ -65,7 +68,7 @@ func (s *Service) AvatarContent(ctx context.Context, id uuid.UUID, size domain.T
 
 // UserAvatarContent отдаёт актуальный аватар пользователя, а при его
 // отсутствии — заглушку. Запись без объекта в хранилище считается
-// отсутствием аватара.
+// отсутствием аватара. Кешировать ответ дольше cacheCurrent нельзя.
 func (s *Service) UserAvatarContent(ctx context.Context, userID string, size domain.ThumbnailSize) (Content, error) {
 	ctx, span := s.tracer.Start(ctx, "service.user_avatar_content",
 		trace.WithAttributes(attribute.String(attrUserID, userID)))
@@ -90,6 +93,8 @@ func (s *Service) UserAvatarContent(ctx context.Context, userID string, size dom
 		return Content{}, observability.SpanError(span,
 			fmt.Errorf("get avatar content of user %s: %w", userID, err))
 	}
+
+	content.MaxAge = min(content.MaxAge, cacheCurrent)
 
 	return content, nil
 }

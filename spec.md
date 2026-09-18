@@ -18,7 +18,7 @@
 | Наблюдаемость | OpenTelemetry (трейсы), `prometheus/client_golang` (метрики) |
 | Стек мониторинга | Prometheus, Grafana, Jaeger, Loki + Alloy, Alertmanager |
 | Тесты | `stretchr/testify` (+ `suite` для интеграционных), `testcontainers-go` |
-| Деплой | Docker Compose |
+| Деплой | Docker Compose (локально), Kubernetes + Helm ([§9](#9-деплой-в-kubernetes)) |
 
 Три выбора требуют пояснения:
 
@@ -64,7 +64,10 @@ internal/
     handler/                    # обработчики avatar.uploaded / avatar.deleted
     reconciler/                 # добор зависших загрузок (§6.3)
 migrations/                     # SQL-миграции
+api/                            # OpenAPI-спецификация REST API
 deploy/                         # конфиги стека наблюдаемости
+  charts/gophprofile/           # Helm Chart (§9)
+    files/                      # алерты, дашборды Grafana, конфиг метрик RabbitMQ — общие с compose
 build/                          # Dockerfile.server, Dockerfile.worker, Dockerfile.migrator
 docker-compose.yml
 ```
@@ -113,7 +116,8 @@ Query (опционально):
 
 200 → бинарные данные изображения
       Content-Type: image/*
-      Cache-Control: max-age=86400
+      Cache-Control: max-age=86400   (/avatars/{avatar_id})
+                     max-age=300     (/users/{user_id}/avatar)
       ETag: "<hash>"
 304 → если совпал If-None-Match
 404 → { "error": "Avatar not found" }
@@ -124,6 +128,8 @@ Query (опционально):
 `ETag` берётся из S3 — MinIO возвращает md5 объекта.
 
 **Миниатюры ещё нет.** Если запрошен `size=100x100|300x300`, а миниатюры нет, отдаётся оригинал: временно неточный размер лучше, чем 404. Пока обработка не завершилась — с `Cache-Control: max-age=60`, чтобы клиент скоро перезапросил готовую миниатюру; при терминальном `processing_status = failed` — с обычными сутками, миниатюра уже не появится.
+
+**Кеш актуального аватара** — не дольше 5 минут: по одному адресу после новой загрузки или удаления отдаётся другое изображение. Содержимое `/avatars/{avatar_id}` не меняется, ему — сутки.
 
 **Актуальный аватар** пользователя — последний по `created_at` среди живых (`deleted_at IS NULL`) записей с `upload_status = 'uploaded'`: аватаров у пользователя может быть несколько, [§4.3](#43-метаданные-и-список) отдаёт список. Фильтр по статусу загрузки обязателен — без него оборвавшаяся загрузка маскирует рабочий аватар.
 
@@ -172,7 +178,7 @@ Headers: X-User-ID: string (required)
 
 Удаление идемпотентно: повторный `DELETE` уже удалённого аватара → 404.
 
-Мягкое удаление в БД (`deleted_at`), файлы из S3 удаляет worker асинхронно.
+Мягкое удаление в БД (`deleted_at`), файлы из S3 удаляет worker асинхронно и отмечает уборку в `files_removed_at`. Если событие не опубликовалось, сервер удаляет файлы сам; если сорвалось и это, уборку доделывает reconciler ([§6.3](#63-reconciler)) — клиент в любом случае получает 204.
 
 ### 4.5 Служебные
 
@@ -184,6 +190,15 @@ GET /health
 
 `degraded` + 503, если недоступен хотя бы один компонент. Каждая проверка — со своим таймаутом (2s), иначе `/health` подвисает вместе с проверяемой зависимостью и перестаёт быть индикатором.
 
+```
+GET /livez
+200 → пустое тело
+```
+
+`/livez` отвечает 200, пока процесс обслуживает HTTP; зависимости не проверяет. Это liveness-проба Kubernetes ([§9.3](#93-пробы-и-завершение)); `/health` остаётся readiness. Worker отдаёт `/livez` на metrics-листенере.
+
+Служебные пути (`/health`, `/livez`, `/metrics`) не трейсятся, в RED-метрики не входят и логируются на Debug.
+
 ### 4.6 Веб-интерфейс
 
 ```
@@ -193,6 +208,22 @@ GET  /web/gallery/{user_id} — галерея аватарок
 ```
 
 Свой фронтенд на `html/template`, шаблоны и статика через `embed.FS`, без JS-сборки.
+
+Владелец загрузки — `X-User-ID`, если его проставил gateway; поле формы тогда только для чтения. Без заголовка владелец берётся из формы — это демо-режим, отдавать его обычным пользователям нельзя.
+
+### 4.7 Ограничение частоты
+
+```
+429 → { "error": "Too many requests" }
+      Retry-After: секунды до следующего разрешённого запроса
+```
+
+Токен-бакет на ключ: значение `X-User-ID`, у запросов без заголовка — IP клиента.
+Действует на маршруты `/api` и `/web`; служебные пути не ограничиваются.
+
+Конфигурация: `RATE_LIMIT_RPS` — запросов в секунду на ключ, 0 (по умолчанию) —
+ограничитель выключен и middleware не регистрируется; `RATE_LIMIT_BURST` —
+размер всплеска, 0 — двукратный RPS, минимум 1.
 
 ## 5. Модель данных
 
@@ -213,6 +244,7 @@ CREATE TABLE avatars (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     deleted_at TIMESTAMPTZ,
+    files_removed_at TIMESTAMPTZ,
 
     CONSTRAINT avatars_upload_status_check
         CHECK (upload_status IN ('uploading', 'uploaded', 'failed')),
@@ -223,11 +255,15 @@ CREATE TABLE avatars (
 CREATE INDEX idx_avatars_user_id ON avatars(user_id) WHERE deleted_at IS NULL;
 CREATE INDEX idx_avatars_status  ON avatars(upload_status, processing_status, updated_at)
     WHERE deleted_at IS NULL;
+CREATE INDEX idx_avatars_uncleaned ON avatars(updated_at)
+    WHERE files_removed_at IS NULL AND (deleted_at IS NOT NULL OR upload_status = 'failed');
 ```
 
 `width`/`height` добавлены к исходной схеме: [§4.3](#43-метаданные-и-список) требует `dimensions` в метаданных, а размеры известны уже на этапе загрузки из `image.DecodeConfig` — читать их из S3 на каждый запрос не нужно.
 
 `idx_avatars_status` не используется ни одним запросом API — он существует ради reconciler'а ([§6.3](#63-reconciler)). `updated_at` входит в него третьей колонкой, потому что запрос reconciler'а по нему и отбирает (старше отсечки), и упорядочивает; без этой колонки отобранное пришлось бы сортировать отдельно. Индекс частичный: мягко удалённые записи в добор не попадают.
+
+`files_removed_at` — момент, когда файлы удалённой записи или сорвавшейся загрузки убраны из S3. Пустое значение у такой записи — уборка ещё не сделана; по нему её находит reconciler через `idx_avatars_uncleaned`.
 
 `thumbnail_s3_keys` — объект `{"100x100": "thumbnails/<id>/100x100", "300x300": "..."}`.
 
@@ -269,7 +305,7 @@ type AvatarDeleteEvent struct {
 
 Worker перед обработкой проверяет `processing_status` в БД; событие для уже обработанного или удалённого аватара (`completed`, `failed` или запись отсутствует) — ack без работы.
 
-Запись в `processing` обработка начинает заново: это повторная доставка после падения обработчика, и бросать её нельзя. Отсюда следует, что две доставки подряд могут рендерить и писать миниатюры одновременно. Это допускается: ключи детерминированы (`thumbnails/{avatar_id}/{size}`), перезапись даёт то же содержимое. Идемпотентность здесь — про итоговое состояние S3 и БД, а не про то, что работа не повторится.
+Запись в `processing` обработка начинает заново: это повторная доставка после падения обработчика, и бросать её нельзя. Отсюда следует, что две доставки подряд могут рендерить и писать миниатюры одновременно. Это допускается: ключи детерминированы (`thumbnails/{avatar_id}/{size}`), перезапись даёт то же содержимое. Идемпотентность здесь — про итоговое состояние S3 и БД, а не про то, что работа не повторится. Доставка, проигравшая гонку за `completed`, миниатюры не удаляет: они общие с победившей.
 
 ### 6.2 Retry и DLQ
 
@@ -304,6 +340,13 @@ INSERT (upload_status='uploading') → PUT в S3 → UPDATE 'uploaded' → publi
 
 Если процесс умер после `PUT`, но до `publish`, аватар навсегда остаётся в `uploaded` + `pending`. Поэтому worker раз в минуту выбирает записи в состоянии `uploaded` + `pending` старше 5 минут (ровно то, подо что заведён `idx_avatars_status`) и переопубликовывает для них событие. Идемпотентность ([§6.1](#61-идемпотентность)) делает повторную публикацию безопасной.
 
+Тот же проход доделывает уборку файлов:
+
+- `uploading` старше отсечки переводится в `failed` — процесс умер до записи итога загрузки. Если загрузка всё-таки завершается, её `uploading → uploaded` получает запрещённый переход, и сервер тоже ставит `failed`.
+- Для записей с `files_removed_at IS NULL`, которые удалены или в `upload_status = 'failed'`, заново публикуется `avatar.deleted` со всеми ключами. Так подбираются и потерянное событие удаления, и оригинал сорвавшейся загрузки.
+
+Шаги прохода независимы: отказ одного не мешает остальным.
+
 Полноценный transactional outbox корректнее, но требует отдельной таблицы и публишера — оставлено как возможное развитие.
 
 ## 7. Нефункциональные требования
@@ -314,6 +357,14 @@ INSERT (upload_status='uploading') → PUT в S3 → UPDATE 'uploaded' → publi
 - Docker Compose поднимает всё окружение одной командой.
 - Секреты — только через env.
 - Образы собираются многостадийно, с `CGO_ENABLED=0`, и запускаются не от root.
+- Вызовы S3 и публикация событий у server идут через circuit breaker: серия
+  подряд идущих отказов открывает его, и запросы отклоняются с 503 сразу,
+  без ожидания таймаута зависимости; пробный запрос — по истечении окна.
+  `ErrNotFound` и отмена клиентом отказами не считаются. PostgreSQL живёт
+  на пуле и дедлайнах без breaker'а: размыкание перед основной БД превратило бы
+  частичную деградацию в полный отказ, из ротации под и так выводит readiness.
+  Worker'у breaker не нужен — давление на зависимости ограничивает лестница
+  повторов с DLQ.
 
 ## 8. Наблюдаемость
 
@@ -354,7 +405,7 @@ worker'а и reconciler. Контекст между server и worker перед
 
 `user_id` в лейблах не используется, разрез по пользователю остаётся в логах и трейсах. Дополнительно экспортируются стандартные Go/process-коллекторы и статистика пула pgx; глубину очередей отдаёт prometheus-плагин RabbitMQ, метрики хранилища — сам MinIO.
 
-Server отдаёт `/metrics` на основном порту; `/health` и сам `/metrics` в RED-метрики не входят. Worker слушает `/metrics` на отдельном адресе — `WORKER_METRICS_ADDR`, по умолчанию `:9090`. `avatars_storage_bytes` считается суммой `size_bytes` живых записей в БД на каждый scrape.
+Server отдаёт `/metrics` на основном порту; служебные пути ([§4.5](#45-служебные)) в RED-метрики не входят. Worker слушает `/metrics` на отдельном адресе — `WORKER_METRICS_ADDR`, по умолчанию `:9090`. `avatars_storage_bytes` считается суммой `size_bytes` живых записей в БД на каждый scrape.
 
 ### 8.3 Логи
 
@@ -365,4 +416,103 @@ Server отдаёт `/metrics` на основном порту; `/health` и с
 ### 8.4 Алертинг
 
 Prometheus Alertmanager. Правила: доля ошибок HTTP, p95 длительности запроса,
-рост DLQ, недоступность таргетов.
+рост DLQ, недоступность таргетов. Правила и дашборды существуют в одном
+экземпляре внутри chart'а: compose монтирует те же файлы, в Kubernetes они
+приезжают PrometheusRule и ConfigMap'ом для sidecar'а Grafana.
+
+## 9. Деплой в Kubernetes
+
+Целевое окружение — Kubernetes (локальная разработка — Rancher Desktop), конфигурация в Helm Chart `deploy/charts/gophprofile`. Docker Compose остаётся способом
+локального запуска без кластера, вместе со стеком наблюдаемости ([§8](#8-наблюдаемость)).
+
+Приложение и его инфраструктура живут в одном namespace `gophprofile`. Отдельный
+namespace для БД у единственного сервиса ничего не изолирует и усложняет имена
+и политики; сетевые границы внутри namespace задаёт NetworkPolicy по `podSelector`.
+
+### 9.1 Состав ресурсов
+
+| Ресурс | Назначение |
+|---|---|
+| Deployment `server` | API и веб-интерфейс; репликами управляет HPA |
+| Deployment `worker` | обработка событий; фиксированное число реплик |
+| Job миграций | `migrator` как Helm hook `post-install,pre-upgrade`: на установке — после подъёма инфраструктуры релиза, на обновлении — до перекатки подов |
+| Service `server` | ClusterIP, 80 → 8080 |
+| Service `worker` | ClusterIP, только порт метрик — для скрейпа |
+| Ingress | внешний трафик к `/api` и `/web` server; под ingress-nginx — аннотация `proxy-body-size` не меньше лимита загрузки 10MB |
+| ConfigMap | несекретная конфигурация |
+| Secret | `DATABASE_DSN`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `AMQP_URL` |
+| HPA `server` | по CPU ([§9.4](#94-масштабирование)) |
+| PodDisruptionBudget `server` | минимум одна реплика при добровольных выселениях |
+| ServiceMonitor | скрейп `/metrics` server и worker (и RabbitMQ в dev) Prometheus-оператором |
+| PrometheusRule | правила алертинга [§8.4](#84-алертинг) |
+| ConfigMap дашбордов | дашборды Grafana приложения для sidecar'а |
+| NetworkPolicy | [§9.5](#95-безопасность) |
+| ServiceAccount | свой, без прав и без automount токена |
+| StatefulSet PostgreSQL / MinIO / RabbitMQ | инфраструктура dev-режима ([§9.6](#96-окружения)) |
+
+### 9.2 Конфигурация
+
+Переменные окружения — те же, что в compose. Несекретное — в ConfigMap, секреты — в Secret. В prod-values у секретов
+нет значений по умолчанию: релиз без них не устанавливается.
+
+### 9.3 Пробы и завершение
+
+- **Liveness** — `GET /livez`: у server на основном порту, у worker'а на
+  metrics-листенере. Зависимости не проверяются: их отказ рестарт пода не чинит.
+- **Readiness** server — `GET /health`: под с недоступной зависимостью выходит
+  из ротации Service. У worker'а readiness нет: входящий трафик он не принимает,
+  его Service существует ради скрейпа метрик.
+- **Завершение** — SIGTERM от kubelet запускает graceful shutdown;
+  `terminationGracePeriodSeconds` больше внутренних shutdown-таймаутов, чтобы
+  начатая работа и flush спанов успели до SIGKILL. Дренаж worker'а ограничен
+  общим `WORKER_SHUTDOWN_TIMEOUT` поверх пределов на отдельные сообщения.
+  У server `preStop` с паузой 5s: под уходит из эндпоинтов Service асинхронно
+  с SIGTERM, и без паузы ingress-контроллер успел бы прислать запрос в уже
+  закрытый листенер. Поды server мягко разнесены по узлам.
+- **Смена конфигурации** — хеши ConfigMap и Secret в аннотациях pod template:
+  `helm upgrade` с новыми значениями перекатывает поды.
+
+### 9.4 Масштабирование
+
+HPA server: 2–10 реплик, целевая утилизация CPU 70% от requests; требуется
+metrics-server. Память в метриках HPA нет: `GOMEMLIMIT` держит heap у своего
+предела независимо от нагрузки, и утилизация по памяти масштабированию
+не сигнал. Worker не под HPA: его нагрузку определяет глубина
+очереди, а не CPU подов, — масштабирование по метрикам брокера (KEDA) вне объёма.
+`resources.requests`/`limits` заданы у обоих Deployment'ов; `GOMEMLIMIT` worker'а
+ниже limit памяти, как в compose.
+
+### 9.5 Безопасность
+
+NetworkPolicy (default deny в обе стороны, разрешено только перечисленное):
+
+- ingress server — от ingress-контроллера на порт приложения, от Prometheus на него же
+  (метрики на основном порту); ingress worker — только от Prometheus на порт метрик;
+- egress обоих — PostgreSQL, MinIO, RabbitMQ, OTLP-коллектор и DNS.
+
+Поды: `runAsNonRoot`, `readOnlyRootFilesystem`, `capabilities: drop ALL`,
+`seccompProfile: RuntimeDefault`, `allowPrivilegeEscalation: false`. Namespace
+помечен Pod Security Standards уровня `restricted` (enforce); лейблы ставятся
+при создании namespace, вне chart'а. PodSecurityPolicy не используется —
+удалён из Kubernetes в 1.25, его роль выполняют PSS.
+
+ServiceAccount свой; к API Kubernetes сервис не обращается, поэтому прав нет
+и `automountServiceAccountToken: false`.
+
+### 9.6 Окружения
+
+`values.yaml` — общие значения по умолчанию; окружения — накладываемые файлы:
+
+- **dev** (`values-dev.yaml`) — локальный кластер: PostgreSQL, MinIO и RabbitMQ
+  поднимаются минимальными StatefulSet'ами в том же namespace, бакет создаёт
+  одноразовый Job, креды локальные. Готовые чарты инфраструктуры не используются:
+  каталог Bitnami урезан и как зависимость ненадёжен, операторы для локального
+  кластера избыточны.
+- **prod** (`values-prod.yaml`) — StatefulSet'ы инфраструктуры выключены, адреса
+  приходят из values, секреты — из внешнего Secret.
+
+ServiceMonitor, PrometheusRule и ConfigMap дашбордов включаются флагами
+(по умолчанию выключены — без CRD оператора установка падает), в dev включены.
+Локально — kube-prometheus-stack с Grafana, Alertmanager, kube-state-metrics
+и node-exporter: кроме дашбордов приложения, Grafana показывает состояние
+кластера.

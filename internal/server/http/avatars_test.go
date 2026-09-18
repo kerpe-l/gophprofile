@@ -2,6 +2,7 @@ package http_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -228,6 +229,12 @@ func TestErrorMapping(t *testing.T) {
 			err:        domain.ErrInvalidTransition,
 			wantStatus: http.StatusConflict,
 			wantError:  "Avatar state changed",
+		},
+		{
+			name:       "dependency unavailable",
+			err:        fmt.Errorf("storage: %w", domain.ErrUnavailable),
+			wantStatus: http.StatusServiceUnavailable,
+			wantError:  "Service temporarily unavailable",
 		},
 		{
 			name:       "unknown failure",
