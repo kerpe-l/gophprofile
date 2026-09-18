@@ -15,13 +15,16 @@ kubectl label namespace gophprofile \
   pod-security.kubernetes.io/warn=restricted
 ```
 
-**Dev** (локальный кластер, инфраструктура внутри, образы собраны в containerd
-кластера):
+**Dev** (локальный кластер, инфраструктура внутри):
 
 ```sh
-helm install gophprofile deploy/charts/gophprofile \
-  -n gophprofile -f deploy/charts/gophprofile/values-dev.yaml
+make k8s-deploy
 ```
+
+Команда собирает образы в docker daemon кластера — он отдельный от того, где
+собирает compose, — и ставит релиз с тегом образов по версии из git; новый
+тег перекатывает поды. Контекст docker — `K8S_CONTEXT` (по умолчанию
+`rancher-desktop`), только сборка — `make k8s-images`.
 
 **Prod** (инфраструктура снаружи; Secret с `DATABASE_DSN`, `S3_ACCESS_KEY`,
 `S3_SECRET_KEY`, `AMQP_URL` создаётся заранее):
