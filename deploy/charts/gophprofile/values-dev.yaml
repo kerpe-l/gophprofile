@@ -22,3 +22,10 @@ minio:
   enabled: true
 rabbitmq:
   enabled: true
+
+serviceMonitor:
+  enabled: true
+prometheusRule:
+  enabled: true
+dashboards:
+  enabled: true

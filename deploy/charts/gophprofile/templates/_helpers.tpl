@@ -69,10 +69,14 @@ capabilities:
     - port: {{ .Values.networkPolicy.externalEgress.ports.amqp }}
 {{- end }}
 {{- with .Values.config.otlpEndpoint }}
+{{- $port := splitList ":" . | last }}
+{{- if not (regexMatch "^[0-9]+$" $port) }}
+{{- fail "config.otlpEndpoint must be host:port" }}
+{{- end }}
 - to:
     - ipBlock:
         cidr: {{ include "gophprofile.externalCidr" $ }}
   ports:
-    - port: {{ splitList ":" . | last }}
+    - port: {{ $port }}
 {{- end }}
 {{- end }}

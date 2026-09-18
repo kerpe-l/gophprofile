@@ -43,8 +43,28 @@ pre-upgrade hook'ом до перекатки подов. `helm uninstall` не 
 инфраструктуры — данные переживают переустановку, чистка вручную:
 `kubectl delete pvc --all -n gophprofile`.
 
+## Ingress
+
+По умолчанию — IngressClass кластера по умолчанию, без аннотаций. Под
+ingress-nginx лимит тела запроса поднимается до лимита загрузки:
+
+```sh
+--set ingress.className=nginx \
+--set-string ingress.annotations."nginx\.ingress\.kubernetes\.io/proxy-body-size"=10m
+```
+
+В NetworkPolicy пропускается трафик от контроллера из
+`networkPolicy.ingressController` (по умолчанию traefik в `kube-system`,
+как в k3s/Rancher Desktop); под другой контроллер значения меняются вместе.
+
 ## Мониторинг
 
-ServiceMonitor'ы рассчитаны на Prometheus Operator (локально —
-kube-prometheus-stack, values в `deploy/monitoring-values.yaml`); без него —
-`--set serviceMonitor.enabled=false`.
+ServiceMonitor'ы, PrometheusRule и ConfigMap дашбордов рассчитаны на Prometheus
+Operator и включаются флагами `serviceMonitor.enabled`, `prometheusRule.enabled`,
+`dashboards.enabled` — в `values-dev.yaml` все три включены. Локальный стек —
+kube-prometheus-stack с `deploy/monitoring-values.yaml`: оператор выбирает
+мониторы и правила без лейбла `release`, sidecar Grafana подхватывает дашборды
+из всех namespace'ов. Для оператора с селекторами по лейблам —
+`serviceMonitor.labels` и `prometheusRule.labels`.
+
+Правила алертинга и дашборды лежат в `files/` и общие с docker compose.

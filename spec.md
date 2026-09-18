@@ -67,6 +67,7 @@ migrations/                     # SQL-миграции
 api/                            # OpenAPI-спецификация REST API
 deploy/                         # конфиги стека наблюдаемости
   charts/gophprofile/           # Helm Chart (§9)
+    files/                      # алерты, дашборды Grafana, конфиг метрик RabbitMQ — общие с compose
 build/                          # Dockerfile.server, Dockerfile.worker, Dockerfile.migrator
 docker-compose.yml
 ```
@@ -398,7 +399,9 @@ Server отдаёт `/metrics` на основном порту; служебн�
 ### 8.4 Алертинг
 
 Prometheus Alertmanager. Правила: доля ошибок HTTP, p95 длительности запроса,
-рост DLQ, недоступность таргетов.
+рост DLQ, недоступность таргетов. Правила и дашборды существуют в одном
+экземпляре внутри chart'а: compose монтирует те же файлы, в Kubernetes они
+приезжают PrometheusRule и ConfigMap'ом для sidecar'а Grafana.
 
 ## 9. Деплой в Kubernetes
 
@@ -418,12 +421,14 @@ namespace для БД у единственного сервиса ничего 
 | Job миграций | `migrator` как Helm hook `post-install,pre-upgrade`: на установке — после подъёма инфраструктуры релиза, на обновлении — до перекатки подов |
 | Service `server` | ClusterIP, 80 → 8080 |
 | Service `worker` | ClusterIP, только порт метрик — для скрейпа |
-| Ingress | внешний трафик к server; `proxy-body-size` согласован с лимитом загрузки 10MB |
+| Ingress | внешний трафик к `/api` и `/web` server; под ingress-nginx — аннотация `proxy-body-size` не меньше лимита загрузки 10MB |
 | ConfigMap | несекретная конфигурация |
 | Secret | `DATABASE_DSN`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `AMQP_URL` |
-| HPA `server` | по CPU и памяти ([§9.4](#94-масштабирование)) |
+| HPA `server` | по CPU ([§9.4](#94-масштабирование)) |
 | PodDisruptionBudget `server` | минимум одна реплика при добровольных выселениях |
-| ServiceMonitor | скрейп `/metrics` server и worker Prometheus-оператором |
+| ServiceMonitor | скрейп `/metrics` server и worker (и RabbitMQ в dev) Prometheus-оператором |
+| PrometheusRule | правила алертинга [§8.4](#84-алертинг) |
+| ConfigMap дашбордов | дашборды Grafana приложения для sidecar'а |
 | NetworkPolicy | [§9.5](#95-безопасность) |
 | ServiceAccount | свой, без прав и без automount токена |
 | StatefulSet PostgreSQL / MinIO / RabbitMQ | инфраструктура dev-режима ([§9.6](#96-окружения)) |
@@ -444,11 +449,18 @@ namespace для БД у единственного сервиса ничего 
   `terminationGracePeriodSeconds` больше внутренних shutdown-таймаутов, чтобы
   начатая работа и flush спанов успели до SIGKILL. Дренаж worker'а ограничен
   общим `WORKER_SHUTDOWN_TIMEOUT` поверх пределов на отдельные сообщения.
+  У server `preStop` с паузой 5s: под уходит из эндпоинтов Service асинхронно
+  с SIGTERM, и без паузы ingress-контроллер успел бы прислать запрос в уже
+  закрытый листенер. Поды server мягко разнесены по узлам.
+- **Смена конфигурации** — хеши ConfigMap и Secret в аннотациях pod template:
+  `helm upgrade` с новыми значениями перекатывает поды.
 
 ### 9.4 Масштабирование
 
-HPA server: 2–10 реплик, целевая утилизация CPU 70% и памяти 80% от requests;
-требуется metrics-server. Worker не под HPA: его нагрузку определяет глубина
+HPA server: 2–10 реплик, целевая утилизация CPU 70% от requests; требуется
+metrics-server. Память в метриках HPA нет: `GOMEMLIMIT` держит heap у своего
+предела независимо от нагрузки, и утилизация по памяти масштабированию
+не сигнал. Worker не под HPA: его нагрузку определяет глубина
 очереди, а не CPU подов, — масштабирование по метрикам брокера (KEDA) вне объёма.
 `resources.requests`/`limits` заданы у обоих Deployment'ов; `GOMEMLIMIT` worker'а
 ниже limit памяти, как в compose.
@@ -482,4 +494,8 @@ ServiceAccount свой; к API Kubernetes сервис не обращаетс�
 - **prod** (`values-prod.yaml`) — StatefulSet'ы инфраструктуры выключены, адреса
   приходят из values, секреты — из внешнего Secret.
 
-ServiceMonitor рассчитан на Prometheus Operator (локально — kube-prometheus-stack).
+ServiceMonitor, PrometheusRule и ConfigMap дашбордов включаются флагами
+(по умолчанию выключены — без CRD оператора установка падает), в dev включены.
+Локально — kube-prometheus-stack с Grafana, Alertmanager, kube-state-metrics
+и node-exporter: кроме дашбордов приложения, Grafana показывает состояние
+кластера.

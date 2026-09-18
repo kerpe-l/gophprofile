@@ -211,5 +211,14 @@ spec:
               app: worker
       ports:
         - port: 5672
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.prometheus.namespace }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.prometheus.podLabels | nindent 14 }}
+      ports:
+        - port: 15692
 {{- end }}
 {{- end }}

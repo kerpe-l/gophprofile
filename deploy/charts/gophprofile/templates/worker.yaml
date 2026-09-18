@@ -13,11 +13,15 @@ spec:
     metadata:
       labels:
         app: worker
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- if .Values.secrets.create }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- end }}
     spec:
       serviceAccountName: gophprofile
-      # Больше бюджета завершения: обработка сообщения до 60s плюс flush
-      # спанов и метрик.
-      terminationGracePeriodSeconds: 75
+      # WORKER_SHUTDOWN_TIMEOUT плюс flush спанов и остановка листенера метрик.
+      terminationGracePeriodSeconds: 90
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532

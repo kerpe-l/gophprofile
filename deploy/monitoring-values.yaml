@@ -1,21 +1,27 @@
-# Values для kube-prometheus-stack: только оператор, CRD и Prometheus —
-# остальной стек наблюдаемости живёт в docker compose.
+# Values для kube-prometheus-stack: оператор, Prometheus, Alertmanager, Grafana
+# с дашбордами кластера и приложения. Логи и трейсы — в docker compose.
 # helm install monitoring prometheus-community/kube-prometheus-stack \
 #   -n monitoring --create-namespace -f deploy/monitoring-values.yaml
 grafana:
-  enabled: false
+  # Дашборды приложения — из ConfigMap'ов с лейблом grafana_dashboard в любом namespace.
+  sidecar:
+    dashboards:
+      searchNamespace: ALL
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 256Mi
 alertmanager:
-  enabled: false
-nodeExporter:
-  enabled: false
-kubeStateMetrics:
-  enabled: false
-defaultRules:
-  create: false
-kubelet:
-  enabled: false
-kubeApiServer:
-  enabled: false
+  alertmanagerSpec:
+    resources:
+      requests:
+        cpu: 10m
+        memory: 32Mi
+      limits:
+        memory: 128Mi
+# Компоненты control plane k3s наружу метрик не отдают.
 kubeControllerManager:
   enabled: false
 kubeScheduler:
@@ -24,11 +30,10 @@ kubeProxy:
   enabled: false
 kubeEtcd:
   enabled: false
-coreDns:
-  enabled: false
 prometheus:
   prometheusSpec:
     serviceMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
     retention: 24h
     resources:
       requests:

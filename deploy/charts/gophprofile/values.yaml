@@ -25,6 +25,10 @@ config:
   # host:port OTLP-коллектора; пустое значение выключает трейсинг.
   otlpEndpoint: ""
   otlpInsecure: true
+  # Запросов в секунду на пользователя (X-User-ID, без него — IP); 0 выключает.
+  rateLimitRPS: 20
+  # 0 — двукратный RPS.
+  rateLimitBurst: 0
 
 secrets:
   # Создать Secret из values (dev). Иначе обязателен existingSecret
@@ -38,15 +42,15 @@ server:
   resources:
     requests:
       cpu: 100m
-      memory: 128Mi
+      memory: 256Mi
     limits:
       cpu: 500m
       memory: 512Mi
+  # Только CPU: GOMEMLIMIT держит heap у своего предела независимо от нагрузки.
   hpa:
     minReplicas: 2
     maxReplicas: 10
     cpuUtilization: 70
-    memoryUtilization: 80
   pdb:
     minAvailable: 1
 
@@ -62,13 +66,25 @@ worker:
       memory: 512Mi
 
 ingress:
+  enabled: true
   host: avatars.localhost
   className: ""
-  annotations:
-    nginx.ingress.kubernetes.io/proxy-body-size: 10m
+  annotations: {}
 
+# Ресурсы Prometheus Operator; без его CRD установка падает.
 serviceMonitor:
-  enabled: true
+  enabled: false
+  # Лейблы, по которым serviceMonitorSelector оператора выбирает монитор.
+  labels: {}
+prometheusRule:
+  enabled: false
+  # Лейблы, по которым ruleSelector оператора выбирает правила.
+  labels: {}
+# ConfigMap с дашбордами для sidecar'а Grafana.
+dashboards:
+  enabled: false
+  labels:
+    grafana_dashboard: "1"
 
 networkPolicy:
   enabled: true

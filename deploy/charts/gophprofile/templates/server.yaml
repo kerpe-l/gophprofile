@@ -12,9 +12,22 @@ spec:
     metadata:
       labels:
         app: server
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- if .Values.secrets.create }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- end }}
     spec:
       serviceAccountName: gophprofile
+      # preStop + HTTP_SHUTDOWN_TIMEOUT + flush спанов с запасом.
       terminationGracePeriodSeconds: 30
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: server
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532
@@ -38,6 +51,12 @@ spec:
           env:
             - name: GOMEMLIMIT
               value: {{ .Values.server.gomemlimit | quote }}
+          # Под уходит из эндпоинтов Service асинхронно с SIGTERM: пауза даёт
+          # ingress-контроллеру перестать слать запросы до остановки приёма.
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: 5
           livenessProbe:
             httpGet:
               path: /livez

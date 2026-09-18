@@ -18,9 +18,3 @@ spec:
         target:
           type: Utilization
           averageUtilization: {{ .Values.server.hpa.cpuUtilization }}
-    - type: Resource
-      resource:
-        name: memory
-        target:
-          type: Utilization
-          averageUtilization: {{ .Values.server.hpa.memoryUtilization }}
