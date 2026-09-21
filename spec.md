@@ -441,7 +441,7 @@ namespace для БД у единственного сервиса ничего 
 | Ingress | внешний трафик к `/api` и `/web` server; под ingress-nginx — аннотация `proxy-body-size` не меньше лимита загрузки 10MB |
 | ConfigMap | несекретная конфигурация |
 | Secret | `DATABASE_DSN`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `AMQP_URL` |
-| HPA `server` | по CPU ([§9.4](#94-масштабирование)) |
+| HPA `server` | по CPU и памяти ([§9.4](#94-масштабирование)) |
 | PodDisruptionBudget `server` | минимум одна реплика при добровольных выселениях |
 | ServiceMonitor | скрейп `/metrics` server и worker (и RabbitMQ в dev) Prometheus-оператором |
 | PrometheusRule | правила алертинга [§8.4](#84-алертинг) |
@@ -474,10 +474,9 @@ namespace для БД у единственного сервиса ничего 
 
 ### 9.4 Масштабирование
 
-HPA server: 2–10 реплик, целевая утилизация CPU 70% от requests; требуется
-metrics-server. Память в метриках HPA нет: `GOMEMLIMIT` держит heap у своего
-предела независимо от нагрузки, и утилизация по памяти масштабированию
-не сигнал. Worker не под HPA: его нагрузку определяет глубина
+HPA server: 2–10 реплик, целевая утилизация от requests — CPU 70%, память 80%;
+требуется metrics-server. Порог памяти ниже `GOMEMLIMIT`: реплики добавляются
+раньше, чем GC упрётся в предел. Worker не под HPA: его нагрузку определяет глубина
 очереди, а не CPU подов, — масштабирование по метрикам брокера (KEDA) вне объёма.
 `resources.requests`/`limits` заданы у обоих Deployment'ов; `GOMEMLIMIT` worker'а
 ниже limit памяти, как в compose.
@@ -505,7 +504,8 @@ ServiceAccount свой; к API Kubernetes сервис не обращаетс�
 
 - **dev** (`values-dev.yaml`) — локальный кластер: PostgreSQL, MinIO и RabbitMQ
   поднимаются минимальными StatefulSet'ами в том же namespace, бакет создаёт
-  одноразовый Job, креды локальные. Готовые чарты инфраструктуры не используются:
+  одноразовый Job. Креды — в `values-dev.yaml`: создаётся из
+  `values-dev.example.yaml`, в git не попадает. Готовые чарты инфраструктуры не используются:
   каталог Bitnami урезан и как зависимость ненадёжен, операторы для локального
   кластера избыточны.
 - **prod** (`values-prod.yaml`) — StatefulSet'ы инфраструктуры выключены, адреса

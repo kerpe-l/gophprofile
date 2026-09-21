@@ -46,11 +46,11 @@ server:
     limits:
       cpu: 500m
       memory: 512Mi
-  # Только CPU: GOMEMLIMIT держит heap у своего предела независимо от нагрузки.
   hpa:
     minReplicas: 2
     maxReplicas: 10
     cpuUtilization: 70
+    memoryUtilization: 80
   pdb:
     minAvailable: 1
 

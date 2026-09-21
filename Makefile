@@ -61,7 +61,10 @@ k8s-images:
 			-t gophprofile-$$img:$(IMAGE_TAG) . || exit 1; \
 	done
 
-k8s-deploy: k8s-images
+$(CHART)/values-dev.yaml:
+	$(error $@ not found: copy $(CHART)/values-dev.example.yaml and fill in the secrets)
+
+k8s-deploy: k8s-images $(CHART)/values-dev.yaml
 	helm upgrade --install gophprofile $(CHART) -n $(K8S_NAMESPACE) \
 		-f $(CHART)/values-dev.yaml \
 		$(foreach img,$(IMAGES),--set images.$(img).tag=$(IMAGE_TAG))

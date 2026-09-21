@@ -95,11 +95,11 @@ jobs:
 
       - run: go install github.com/yannh/kubeconform/cmd/kubeconform@v0.7.0
 
-      - run: helm lint $CHART -f $CHART/values-dev.yaml
+      - run: helm lint $CHART -f $CHART/values-dev.example.yaml
       - run: helm lint $CHART -f $CHART/values-prod.yaml $PROD_SET
 
       - run: >-
-          helm template gophprofile $CHART -n gophprofile -f $CHART/values-dev.yaml
+          helm template gophprofile $CHART -n gophprofile -f $CHART/values-dev.example.yaml
           | kubeconform -strict -summary -schema-location default -schema-location "$CRD_SCHEMAS"
       - run: >-
           helm template gophprofile $CHART -n gophprofile -f $CHART/values-prod.yaml $PROD_SET

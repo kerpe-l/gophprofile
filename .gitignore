@@ -1,3 +1,4 @@
 bin/
 coverage.out
 .env
+deploy/charts/gophprofile/values-dev.yaml

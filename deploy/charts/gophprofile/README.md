@@ -15,9 +15,11 @@ kubectl label namespace gophprofile \
   pod-security.kubernetes.io/warn=restricted
 ```
 
-**Dev** (локальный кластер, инфраструктура внутри):
+**Dev** (локальный кластер, инфраструктура внутри). Секреты — в
+`values-dev.yaml`: файл создаётся из примера, плейсхолдеры в нём заменяются локальными паролями:
 
 ```sh
+cp deploy/charts/gophprofile/values-dev.example.yaml deploy/charts/gophprofile/values-dev.yaml
 make k8s-deploy
 ```
 
@@ -64,7 +66,7 @@ ingress-nginx лимит тела запроса поднимается до л�
 
 ServiceMonitor'ы, PrometheusRule и ConfigMap дашбордов рассчитаны на Prometheus
 Operator и включаются флагами `serviceMonitor.enabled`, `prometheusRule.enabled`,
-`dashboards.enabled` — в `values-dev.yaml` все три включены. Локальный стек —
+`dashboards.enabled` — в `values-dev.example.yaml` все три включены. Локальный стек —
 kube-prometheus-stack с `deploy/monitoring-values.yaml`: оператор выбирает
 мониторы и правила без лейбла `release`, sidecar Grafana подхватывает дашборды
 из всех namespace'ов. Для оператора с селекторами по лейблам —
