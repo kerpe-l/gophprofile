@@ -49,7 +49,7 @@ services:
     restart: unless-stopped
 
   minio:
-    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    image: quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: ${S3_ACCESS_KEY:-minioadmin}
@@ -70,7 +70,7 @@ services:
 
   # Одноразовый контейнер: создаёт бакет и выходит.
   minio-init:
-    image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+    image: quay.io/minio/mc:RELEASE.2025-04-16T18-13-26Z
     depends_on:
       minio:
         condition: service_healthy
@@ -91,7 +91,7 @@ services:
     volumes:
       - rabbitmq-data:/var/lib/rabbitmq
       - ./deploy/rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro
-      - ./deploy/rabbitmq/10-prometheus.conf:/etc/rabbitmq/conf.d/10-prometheus.conf:ro
+      - ./deploy/charts/gophprofile/files/rabbitmq-prometheus.conf:/etc/rabbitmq/conf.d/10-prometheus.conf:ro
     healthcheck:
       test: [ "CMD", "rabbitmq-diagnostics", "-q", "ping" ]
       interval: 10s
@@ -129,6 +129,8 @@ services:
       HTTP_ADDR: ":8080"
     ports:
       - "127.0.0.1:${HTTP_PORT:-8080}:8080"
+    # HTTP_SHUTDOWN_TIMEOUT плюс flush спанов.
+    stop_grace_period: 30s
     depends_on:
       migrator:
         condition: service_completed_successfully
@@ -148,6 +150,8 @@ services:
       # Ниже лимита контейнера: GC давит раньше, чем придёт OOM-killer.
       GOMEMLIMIT: 400MiB
     mem_limit: 512m
+    # WORKER_SHUTDOWN_TIMEOUT плюс flush спанов и остановка листенера метрик.
+    stop_grace_period: 90s
     ports:
       - "127.0.0.1:${WORKER_METRICS_PORT:-9091}:9090"
     depends_on:
@@ -165,7 +169,7 @@ services:
       - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
     volumes:
       - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - ./deploy/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - ./deploy/charts/gophprofile/files/alerts.yml:/etc/prometheus/alerts.yml:ro
       - prometheus-data:/prometheus
     restart: unless-stopped
 
@@ -209,7 +213,7 @@ services:
       - "127.0.0.1:${GRAFANA_PORT:-3000}:3000"
     volumes:
       - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
-      - ./deploy/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - ./deploy/charts/gophprofile/files/dashboards:/var/lib/grafana/dashboards:ro
       - grafana-data:/var/lib/grafana
     restart: unless-stopped
 

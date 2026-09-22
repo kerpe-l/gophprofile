@@ -1,0 +1,15 @@
+# Prod: инфраструктура вне кластера. Обязательно задать secrets.existingSecret,
+# config.s3Endpoint, ingress.host и networkPolicy.externalEgress.cidr — без них
+# релиз не устанавливается.
+
+config:
+  appEnv: production
+  s3Endpoint: ""
+  s3UseSSL: true
+
+secrets:
+  create: false
+  existingSecret: ""
+
+ingress:
+  host: ""

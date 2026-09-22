@@ -66,6 +66,9 @@ func TestLoadServerDefaults(t *testing.T) {
 	assert.Equal(t, defaultImageMaxUploadBytes, cfg.Image.MaxUploadBytes)
 	assert.Equal(t, defaultImageMaxPixels, cfg.Image.MaxPixels)
 	assert.Equal(t, defaultImageJPEGQuality, cfg.Image.JPEGQuality)
+	// Нулевой RPS — ограничитель частоты выключен.
+	assert.Zero(t, cfg.RateLimit.RPS)
+	assert.Zero(t, cfg.RateLimit.Burst)
 }
 
 func TestLoadServerOverrides(t *testing.T) {
@@ -85,6 +88,8 @@ func TestLoadServerOverrides(t *testing.T) {
 	env[envOtelEndpoint] = "jaeger:4317"
 	env[envOtelInsecure] = "true"
 	env[envOtelSampleRatio] = "0.25"
+	env[envRateLimitRPS] = "5"
+	env[envRateLimitBurst] = "10"
 
 	cfg, err := loadServer(mapEnv(env))
 	require.NoError(t, err)
@@ -104,6 +109,8 @@ func TestLoadServerOverrides(t *testing.T) {
 	assert.Equal(t, "jaeger:4317", cfg.Otel.Endpoint)
 	assert.True(t, cfg.Otel.Insecure)
 	assert.InEpsilon(t, 0.25, cfg.Otel.SampleRatio, 1e-9)
+	assert.InEpsilon(t, 5.0, cfg.RateLimit.RPS, 1e-9)
+	assert.Equal(t, 10, cfg.RateLimit.Burst)
 }
 
 func TestLoadServerInvalidValues(t *testing.T) {
@@ -130,6 +137,9 @@ func TestLoadServerInvalidValues(t *testing.T) {
 		{name: "sample ratio NaN", key: envOtelSampleRatio, value: "NaN", wantErr: envOtelSampleRatio + " must be between 0 and 1"},
 		{name: "sample ratio Inf", key: envOtelSampleRatio, value: "+Inf", wantErr: envOtelSampleRatio + " must be between 0 and 1"},
 		{name: "jpeg quality above range", key: envImageJPEGQuality, value: "101", wantErr: envImageJPEGQuality + " must be at most 100"},
+		{name: "rate limit negative", key: envRateLimitRPS, value: "-1", wantErr: envRateLimitRPS + " must be zero or positive"},
+		{name: "rate limit NaN", key: envRateLimitRPS, value: "NaN", wantErr: envRateLimitRPS + " must be zero or positive"},
+		{name: "rate limit burst negative", key: envRateLimitBurst, value: "-2", wantErr: envRateLimitBurst + " must be zero or positive"},
 		// Объявленная пустой переменная — дефолт не подставляется.
 		{name: "empty string", key: envS3Bucket, value: "", wantErr: envS3Bucket + " is required"},
 		{name: "empty duration", key: envDBQueryTimeout, value: "", wantErr: envDBQueryTimeout},
@@ -179,14 +189,17 @@ func TestLoadWorkerSection(t *testing.T) {
 	assert.Equal(t, defaultWorkerStuckAfter, cfg.Worker.StuckAfter)
 	assert.Equal(t, defaultWorkerReconcileBatch, cfg.Worker.ReconcileBatch)
 	assert.Equal(t, defaultWorkerMetricsAddr, cfg.Worker.MetricsAddr)
+	assert.Equal(t, defaultWorkerShutdownTimeout, cfg.Worker.ShutdownTimeout)
 
 	env := requiredEnv()
 	env[envWorkerReconcileBatch] = "0"
 	env[envWorkerMetricsAddr] = ""
+	env[envWorkerShutdownTimeout] = "0s"
 
 	_, err = loadWorker(mapEnv(env))
 	require.ErrorContains(t, err, envWorkerReconcileBatch+" must be positive")
 	require.ErrorContains(t, err, envWorkerMetricsAddr+" is required")
+	require.ErrorContains(t, err, envWorkerShutdownTimeout+" must be positive")
 
 	_, err = loadServer(mapEnv(env))
 	require.NoError(t, err)

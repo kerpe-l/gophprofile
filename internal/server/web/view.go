@@ -20,7 +20,9 @@ const (
 // uploadView — форма загрузки. Error непуст, когда форма показана в ответ
 // на неудачную отправку.
 type uploadView struct {
-	UserID  string
+	UserID string
+	// Fixed — владельца задал gateway, в форме он только для чтения.
+	Fixed   bool
 	Error   string
 	MaxSize string
 }
@@ -48,9 +50,10 @@ type errorView struct {
 	Message string
 }
 
-func (h *Handlers) newUploadView(userID, failure string) uploadView {
+func (h *Handlers) newUploadView(userID string, fixed bool, failure string) uploadView {
 	return uploadView{
 		UserID:  userID,
+		Fixed:   fixed,
 		Error:   failure,
 		MaxSize: humanSize(h.maxUpload),
 	}

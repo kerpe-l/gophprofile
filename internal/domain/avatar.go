@@ -39,6 +39,21 @@ func (a Avatar) Thumbnail(size ThumbnailSize) (string, bool) {
 	return key, ok
 }
 
+// StorageKeys возвращает ключи оригинала и миниатюр всех размеров. Ключи
+// миниатюр строятся из идентификатора, а не из записи: миниатюра могла
+// появиться в хранилище после того, как запись прочитали.
+func (a Avatar) StorageKeys() []string {
+	sizes := ThumbnailSizes()
+	keys := make([]string, 0, len(sizes)+1)
+	keys = append(keys, a.S3Key)
+
+	for _, size := range sizes {
+		keys = append(keys, ThumbnailKey(a.ID, size))
+	}
+
+	return keys
+}
+
 // NewAvatar — данные для создания записи об аватаре. Статусы, счётчик попыток
 // и временные метки проставляет база; идентификатор задаёт вызывающий, из него
 // строится S3Key.

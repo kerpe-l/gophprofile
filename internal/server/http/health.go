@@ -64,6 +64,11 @@ func (a *api) health(w http.ResponseWriter, r *http.Request) {
 	writeJSON(ctx, w, a.log, code, response)
 }
 
+// liveness отвечает 200, пока процесс обслуживает HTTP.
+func liveness(w http.ResponseWriter, _ *http.Request) {
+	w.WriteHeader(http.StatusOK)
+}
+
 // checkStatus опрашивает одну зависимость. Причина отказа уходит в лог:
 // наружу отдавать её нельзя — в ней адреса, имена бакетов и очередей.
 func (a *api) checkStatus(ctx context.Context, name string, check Checker) string {

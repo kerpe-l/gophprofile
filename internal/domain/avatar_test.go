@@ -3,6 +3,7 @@ package domain_test
 import (
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/kerpe-l/gophprofile/internal/domain"
@@ -63,4 +64,18 @@ func TestAvatarThumbnail(t *testing.T) {
 			assert.Equal(t, tc.wantKey, key)
 		})
 	}
+}
+
+// Ключи миниатюр строятся из идентификатора и для записи без готовых миниатюр.
+func TestAvatarStorageKeys(t *testing.T) {
+	t.Parallel()
+
+	id := uuid.New()
+	avatar := domain.Avatar{ID: id, S3Key: domain.OriginalKey(id)}
+
+	assert.Equal(t, []string{
+		domain.OriginalKey(id),
+		domain.ThumbnailKey(id, domain.ThumbnailSmall),
+		domain.ThumbnailKey(id, domain.ThumbnailMedium),
+	}, avatar.StorageKeys())
 }

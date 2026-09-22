@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/kerpe-l/gophprofile/internal/breaker"
 	"github.com/kerpe-l/gophprofile/internal/broker"
 	"github.com/kerpe-l/gophprofile/internal/buildinfo"
 	"github.com/kerpe-l/gophprofile/internal/config"
@@ -119,6 +120,11 @@ func run() error {
 	defer cancel()
 
 	if err := srv.Shutdown(shutdownCtx); err != nil {
+		// Дренаж не уложился в таймаут: оставшиеся соединения закрываются жёстко.
+		if cerr := srv.Close(); cerr != nil {
+			log.Error("close http server", slog.Any("error", cerr))
+		}
+
 		return fmt.Errorf("shutdown http server: %w", err)
 	}
 
@@ -177,10 +183,12 @@ func (d *deps) router(cfg *config.Config, log *slog.Logger) (http.Handler, error
 		metrics.NewStorageCollector(d.repo.StorageBytes, cfg.DB.QueryTimeout, log),
 	)
 
+	// Breaker стоит между сервисом и зависимостями, но не перед health-пингами:
+	// readiness должен видеть настоящее состояние зависимости.
 	svc := service.New(
 		d.repo,
-		d.storage,
-		d.publisher,
+		breaker.NewStorage(d.storage, log),
+		breaker.NewPublisher(d.publisher, log),
 		imageproc.New(cfg.Image),
 		placeholder.New(),
 		metrics.NewServer(reg),
@@ -204,6 +212,7 @@ func (d *deps) router(cfg *config.Config, log *slog.Logger) (http.Handler, error
 			httpapi.ComponentBroker: d.broker,
 		},
 		HTTP:           cfg.HTTP,
+		RateLimit:      cfg.RateLimit,
 		MaxUploadBytes: cfg.Image.MaxUploadBytes,
 		Web:            pages,
 		Tracing:        cfg.Otel.Endpoint != "",

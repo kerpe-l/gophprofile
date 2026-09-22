@@ -1,0 +1,515 @@
+openapi: 3.0.3
+info:
+  title: GophProfile API
+  description: >
+    Сервис аватарок: загрузка изображения, раздача оригинала и миниатюр,
+    заглушка для пользователей без аватара. GET-эндпоинты публичны;
+    POST и DELETE требуют заголовок X-User-ID — его проставляет доверенный
+    API-gateway, аутентификацией он не является.
+  version: 1.0.0
+# Аутентификации нет: X-User-ID проставляет доверенный API-gateway.
+security: []
+servers:
+  - url: /
+paths:
+  /api/v1/avatars:
+    post:
+      summary: Загрузка аватара
+      operationId: uploadAvatar
+      parameters:
+        - $ref: '#/components/parameters/XUserID'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: >
+                    Изображение jpeg/png/webp до 10 MB и 50 Мпикс. Формат
+                    определяется по magic bytes; Content-Type клиента и
+                    расширение игнорируются. Файл принимается также под
+                    именем поля image; при обоих приоритет у file.
+      responses:
+        '201':
+          description: Аватар принят, миниатюры создаются асинхронно.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Upload'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '413':
+          description: Файл больше предельного размера.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error: File too large
+                max_size: 10485760
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+        '504':
+          $ref: '#/components/responses/Timeout'
+
+  /api/v1/avatars/{avatar_id}:
+    get:
+      summary: Изображение аватара
+      operationId: getAvatarContent
+      parameters:
+        - $ref: '#/components/parameters/AvatarID'
+        - $ref: '#/components/parameters/Size'
+        - $ref: '#/components/parameters/IfNoneMatch'
+      responses:
+        '200':
+          description: >
+            Бинарные данные изображения. Пока миниатюра запрошенного размера
+            не готова, отдаётся оригинал с Cache-Control max-age=60.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
+          content:
+            image/*:
+              schema:
+                type: string
+                format: binary
+        '304':
+          $ref: '#/components/responses/NotModified'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+        '504':
+          $ref: '#/components/responses/Timeout'
+    delete:
+      summary: Удаление аватара
+      description: >
+        Мягкое удаление; файлы из хранилища убирает worker асинхронно.
+        Идемпотентно — повторный DELETE уже удалённого аватара отвечает 404.
+      operationId: deleteAvatar
+      parameters:
+        - $ref: '#/components/parameters/AvatarID'
+        - $ref: '#/components/parameters/XUserID'
+      responses:
+        '204':
+          description: Аватар удалён.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+        '504':
+          $ref: '#/components/responses/Timeout'
+
+  /api/v1/avatars/{avatar_id}/metadata:
+    get:
+      summary: Метаданные аватара
+      operationId: getAvatarMetadata
+      parameters:
+        - $ref: '#/components/parameters/AvatarID'
+      responses:
+        '200':
+          description: Метаданные аватара.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Metadata'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '504':
+          $ref: '#/components/responses/Timeout'
+
+  /api/v1/users/{user_id}/avatar:
+    get:
+      summary: Актуальный аватар пользователя
+      description: >
+        Последний по created_at живой аватар с загруженным оригиналом.
+        Если аватара нет — 200 с встроенной заглушкой, X-Avatar-Default: true
+        и Cache-Control max-age=300.
+      operationId: getUserAvatar
+      parameters:
+        - $ref: '#/components/parameters/UserID'
+        - $ref: '#/components/parameters/Size'
+        - $ref: '#/components/parameters/IfNoneMatch'
+      responses:
+        '200':
+          description: Изображение аватара либо заглушка.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+            Cache-Control:
+              $ref: '#/components/headers/CacheControl'
+            X-Avatar-Default:
+              description: true, если отдана заглушка.
+              schema:
+                type: string
+                enum: ['true']
+          content:
+            image/*:
+              schema:
+                type: string
+                format: binary
+        '304':
+          $ref: '#/components/responses/NotModified'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+        '504':
+          $ref: '#/components/responses/Timeout'
+    delete:
+      summary: Удаление актуального аватара пользователя
+      description: >
+        Удаляет только актуальный аватар — симметрично GET. Массового
+        удаления всех аватаров пользователя в API нет.
+      operationId: deleteUserAvatar
+      parameters:
+        - $ref: '#/components/parameters/UserID'
+        - $ref: '#/components/parameters/XUserID'
+      responses:
+        '204':
+          description: Аватар удалён.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+        '504':
+          $ref: '#/components/responses/Timeout'
+
+  /api/v1/users/{user_id}/avatars:
+    get:
+      summary: Список аватаров пользователя
+      description: >
+        Живые аватары с загруженным оригиналом, отсортированные
+        по created_at по убыванию.
+      operationId: listUserAvatars
+      parameters:
+        - $ref: '#/components/parameters/UserID'
+      responses:
+        '200':
+          description: Список аватаров; у пользователя без аватаров он пуст.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AvatarList'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '504':
+          $ref: '#/components/responses/Timeout'
+
+  /health:
+    get:
+      summary: Состояние зависимостей (readiness)
+      operationId: health
+      responses:
+        '200':
+          description: Все зависимости доступны.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+        '503':
+          description: Недоступна хотя бы одна зависимость.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+
+  /livez:
+    get:
+      summary: Живость процесса (liveness)
+      operationId: liveness
+      responses:
+        '200':
+          description: Процесс обслуживает HTTP; зависимости не проверяются.
+
+components:
+  parameters:
+    AvatarID:
+      name: avatar_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    UserID:
+      name: user_id
+      in: path
+      required: true
+      schema:
+        type: string
+        maxLength: 255
+    Size:
+      name: size
+      in: query
+      required: false
+      schema:
+        type: string
+        enum: [100x100, 300x300, original]
+        default: original
+    XUserID:
+      name: X-User-ID
+      in: header
+      required: true
+      description: Идентификатор владельца от доверенного API-gateway.
+      schema:
+        type: string
+        maxLength: 255
+    IfNoneMatch:
+      name: If-None-Match
+      in: header
+      required: false
+      schema:
+        type: string
+
+  headers:
+    ETag:
+      description: Хеш содержимого; стабилен, пока объект не изменился.
+      schema:
+        type: string
+    CacheControl:
+      description: >
+        max-age=86400 для готового содержимого, max-age=60 пока миниатюра
+        не готова, max-age=300 для заглушки.
+      schema:
+        type: string
+
+  responses:
+    NotModified:
+      description: Содержимое не менялось (совпал If-None-Match).
+    BadRequest:
+      description: >
+        Некорректный запрос: неверный формат файла, слишком много пикселей,
+        не-UUID идентификатор, неподдерживаемый size, нет заголовка X-User-ID
+        или поля file, значение длиннее 255 символов.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: Invalid file format
+            details: 'Supported formats: jpeg, png, webp'
+    Forbidden:
+      description: Аватар принадлежит другому пользователю.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: Forbidden
+            details: You can only delete your own avatars
+    NotFound:
+      description: Аватар не найден или уже удалён.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: Avatar not found
+    Conflict:
+      description: Состояние аватара изменилось между чтением и записью; запрос можно повторить.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: Avatar state changed
+    Internal:
+      description: Внутренняя ошибка; подробности в логах сервера.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: Internal error
+    Timeout:
+      description: Обработка не уложилась в дедлайн запроса.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: Request timeout
+    TooManyRequests:
+      description: >
+        Превышен лимит частоты запросов ключа (X-User-ID, без него — IP).
+      headers:
+        Retry-After:
+          description: Секунды до следующего разрешённого запроса.
+          schema:
+            type: integer
+            minimum: 1
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: Too many requests
+    Unavailable:
+      description: >
+        Зависимость недоступна, circuit breaker открыт; запрос отклонён
+        без обращения к ней. Имеет смысл повторить позже.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: Service temporarily unavailable
+
+  schemas:
+    Upload:
+      type: object
+      required: [id, user_id, url, status, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+        url:
+          type: string
+          description: Относительный путь к изображению.
+          example: /api/v1/avatars/5f64f1a2-8c1e-4f4e-9d7a-2c1a3b4c5d6e
+        status:
+          type: string
+          enum: [processing, completed, failed]
+          description: Снаружи видно только, готовы миниатюры или нет.
+        created_at:
+          type: string
+          format: date-time
+
+    Metadata:
+      type: object
+      required:
+        [id, user_id, file_name, mime_type, size, dimensions, thumbnails,
+         created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+        file_name:
+          type: string
+        mime_type:
+          type: string
+          enum: [image/jpeg, image/png, image/webp]
+        size:
+          type: integer
+          format: int64
+          description: Размер оригинала в байтах.
+        dimensions:
+          type: object
+          required: [width, height]
+          properties:
+            width:
+              type: integer
+            height:
+              type: integer
+        thumbnails:
+          type: array
+          description: Только готовые миниатюры.
+          items:
+            type: object
+            required: [size, url]
+            properties:
+              size:
+                type: string
+                enum: [100x100, 300x300]
+              url:
+                type: string
+                description: Относительный путь.
+                example: /api/v1/avatars/5f64f1a2-8c1e-4f4e-9d7a-2c1a3b4c5d6e?size=100x100
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    AvatarList:
+      type: object
+      required: [avatars]
+      properties:
+        avatars:
+          type: array
+          items:
+            $ref: '#/components/schemas/Metadata'
+
+    Health:
+      type: object
+      required: [status, components]
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded]
+        components:
+          type: object
+          additionalProperties:
+            type: string
+            enum: [ok, unavailable]
+          example:
+            db: ok
+            s3: ok
+            broker: ok
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+        details:
+          type: string
+        max_size:
+          type: integer
+          format: int64
+          description: Предельный размер файла; только в ответе 413.

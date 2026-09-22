@@ -35,9 +35,10 @@ type UploadInput struct {
 // процесс оставляет запись без файла, а не файл без записи.
 //
 // Неподдерживаемый формат даёт domain.ErrUnsupportedFormat, слишком большое
-// изображение — domain.ErrImageTooBig, отказ хранилища переводит запись
-// в failed. Отказ публикации загрузку не проваливает: застрявшую запись
-// переопубликует reconciler.
+// изображение — domain.ErrImageTooBig. Сорвавшаяся после создания записи
+// загрузка переводит её в failed, а возможно записанный оригинал убирает
+// reconciler. Отказ публикации загрузку не проваливает: застрявшую запись
+// переопубликует он же.
 func (s *Service) Upload(ctx context.Context, in UploadInput) (_ domain.Avatar, err error) {
 	started := time.Now()
 

@@ -59,6 +59,54 @@ jobs:
 
       - run: go test -tags=integration ./... -race -count=1
 
+  vulncheck:
+    name: Vulnerability check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - run: go install golang.org/x/vuln/cmd/govulncheck@latest
+      - run: govulncheck ./...
+
+  chart:
+    name: Helm chart and OpenAPI
+    runs-on: ubuntu-latest
+    env:
+      CHART: deploy/charts/gophprofile
+      # Значения, обязательные для prod-рендера.
+      PROD_SET: >-
+        --set secrets.existingSecret=ci
+        --set config.s3Endpoint=s3.example.com:443
+        --set networkPolicy.externalEgress.cidr=10.0.0.0/8
+      # Схемы CRD (ServiceMonitor) — из каталога datree.
+      CRD_SCHEMAS: https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - run: go install github.com/yannh/kubeconform/cmd/kubeconform@v0.7.0
+
+      - run: helm lint $CHART -f $CHART/values-dev.example.yaml
+      - run: helm lint $CHART -f $CHART/values-prod.yaml $PROD_SET
+
+      - run: >-
+          helm template gophprofile $CHART -n gophprofile -f $CHART/values-dev.example.yaml
+          | kubeconform -strict -summary -schema-location default -schema-location "$CRD_SCHEMAS"
+      - run: >-
+          helm template gophprofile $CHART -n gophprofile -f $CHART/values-prod.yaml $PROD_SET
+          | kubeconform -strict -summary -schema-location default -schema-location "$CRD_SCHEMAS"
+
+      - run: npx --yes @redocly/cli@2 lint api/openapi.yaml
+
   compose:
     name: Docker Compose
     runs-on: ubuntu-latest

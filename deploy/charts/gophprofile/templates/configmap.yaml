@@ -1,0 +1,28 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gophprofile-config
+  labels:
+    {{- include "gophprofile.labels" . | nindent 4 }}
+data:
+  APP_ENV: {{ .Values.config.appEnv | quote }}
+  LOG_LEVEL: {{ .Values.config.logLevel | quote }}
+  LOG_FORMAT: {{ .Values.config.logFormat | quote }}
+  HTTP_ADDR: ":8080"
+  RATE_LIMIT_RPS: {{ .Values.config.rateLimitRPS | quote }}
+  RATE_LIMIT_BURST: {{ .Values.config.rateLimitBurst | quote }}
+  WORKER_SHUTDOWN_TIMEOUT: "75s"
+  {{- if .Values.minio.enabled }}
+  S3_ENDPOINT: {{ .Values.config.s3Endpoint | default "minio:9000" | quote }}
+  {{- else }}
+  S3_ENDPOINT: {{ required "set config.s3Endpoint (external S3 address)" .Values.config.s3Endpoint | quote }}
+  {{- end }}
+  S3_BUCKET: {{ .Values.config.s3Bucket | quote }}
+  S3_USE_SSL: {{ .Values.config.s3UseSSL | quote }}
+  {{- with .Values.config.s3Region }}
+  S3_REGION: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.config.otlpEndpoint }}
+  OTEL_EXPORTER_OTLP_ENDPOINT: {{ . | quote }}
+  OTEL_EXPORTER_OTLP_INSECURE: {{ $.Values.config.otlpInsecure | quote }}
+  {{- end }}

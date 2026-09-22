@@ -57,10 +57,15 @@ func (h *Handler) uploaded(ctx context.Context, msg broker.Message) error {
 		return nil
 	}
 
-	if err := h.process(ctx, avatar); err != nil {
+	processed, err := h.process(ctx, avatar)
+	if err != nil {
 		h.metrics.ObserveProcessing(false, time.Since(started))
 
 		return h.failure(ctx, id, msg, err)
+	}
+
+	if !processed {
+		return nil
 	}
 
 	h.metrics.ObserveProcessing(true, time.Since(started))
@@ -121,11 +126,13 @@ func done(status domain.ProcessingStatus) bool {
 	}
 }
 
-// process создаёт миниатюры и завершает обработку записи.
-func (h *Handler) process(ctx context.Context, avatar domain.Avatar) error {
+// process создаёт миниатюры и завершает обработку записи. Первый результат
+// равен false, когда обработку параллельно завершила другая доставка того же
+// события.
+func (h *Handler) process(ctx context.Context, avatar domain.Avatar) (bool, error) {
 	thumbnails, err := h.render(ctx, avatar)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	// Порядок размеров фиксирован: обход map недетерминирован.
@@ -141,7 +148,7 @@ func (h *Handler) process(ctx context.Context, avatar domain.Avatar) error {
 
 		err := h.storage.Put(ctx, key, bytes.NewReader(data), int64(len(data)), imageproc.ThumbnailMimeType)
 		if err != nil {
-			return fmt.Errorf("store %s thumbnail of avatar %s: %w", size, avatar.ID, err)
+			return false, fmt.Errorf("store %s thumbnail of avatar %s: %w", size, avatar.ID, err)
 		}
 
 		keys[size] = key
@@ -150,19 +157,26 @@ func (h *Handler) process(ctx context.Context, avatar domain.Avatar) error {
 	err = h.repo.CompleteProcessing(ctx, avatar.ID, keys)
 
 	switch {
-	case errors.Is(err, domain.ErrNotFound), errors.Is(err, domain.ErrInvalidTransition):
-		// Запись удалили или завершили, пока шли миниатюры.
+	case errors.Is(err, domain.ErrNotFound):
+		// Запись удалили, пока шли миниатюры.
 		h.removeThumbnails(ctx, avatar.ID, keys)
 
-		return nonRetryable(fmt.Errorf("complete processing of avatar %s: %w", avatar.ID, err))
+		return false, nonRetryable(fmt.Errorf("complete processing of avatar %s: %w", avatar.ID, err))
+	case errors.Is(err, domain.ErrInvalidTransition):
+		// Ключи миниатюр общие у всех доставок: удаление снесло бы файлы,
+		// на которые уже ссылается завершённая запись.
+		h.log.InfoContext(ctx, "upload event skipped: processing finished elsewhere",
+			slog.String("avatar_id", avatar.ID.String()))
+
+		return false, nil
 	case err != nil:
-		return fmt.Errorf("complete processing of avatar %s: %w", avatar.ID, err)
+		return false, fmt.Errorf("complete processing of avatar %s: %w", avatar.ID, err)
 	}
 
-	return nil
+	return true, nil
 }
 
-// removeThumbnails убирает миниатюры, записанные для исчезнувшей записи.
+// removeThumbnails убирает миниатюры, записанные для удалённой записи.
 func (h *Handler) removeThumbnails(ctx context.Context, id uuid.UUID, keys map[domain.ThumbnailSize]string) {
 	if len(keys) == 0 {
 		return

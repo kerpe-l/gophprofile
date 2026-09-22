@@ -1,0 +1,45 @@
+# На установке DDL применяется после подъёма инфраструктуры релиза,
+# на обновлении — до перекатки подов.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: migrations
+  labels:
+    {{- include "gophprofile.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,pre-upgrade
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: 10
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        app: migrations
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: gophprofile
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: migrator
+          image: {{ .Values.images.migrator.repository }}:{{ .Values.images.migrator.tag }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          securityContext:
+            {{- include "gophprofile.containerSecurityContext" . | nindent 12 }}
+          envFrom:
+            - configMapRef:
+                name: gophprofile-config
+            - secretRef:
+                name: {{ include "gophprofile.secretName" . }}
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 64Mi

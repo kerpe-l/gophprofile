@@ -29,6 +29,7 @@ const (
 	callDelete     = "delete"
 	callDeleteMany = "delete-many"
 	callStatus     = "status:"
+	callMarkFiles  = "mark-files-removed"
 )
 
 // callLog — общий журнал вызовов всех фейков.
@@ -65,6 +66,7 @@ type fakeRepo struct {
 	statusErr error
 	deleteErr error
 	listErr   error
+	markErr   error
 
 	// onCreate вызывается внутри Create: тест отменяет им контекст ровно
 	// в тот момент, когда запись уже создана.
@@ -73,6 +75,7 @@ type fakeRepo struct {
 	created  domain.NewAvatar
 	statuses []domain.UploadStatus
 	deleted  []uuid.UUID
+	cleaned  []uuid.UUID
 }
 
 func (r *fakeRepo) Create(_ context.Context, in domain.NewAvatar) (domain.Avatar, error) {
@@ -147,6 +150,13 @@ func (r *fakeRepo) SoftDelete(_ context.Context, id uuid.UUID) error {
 	r.deleted = append(r.deleted, id)
 
 	return r.deleteErr
+}
+
+func (r *fakeRepo) MarkFilesRemoved(_ context.Context, id uuid.UUID) error {
+	r.log.add(callMarkFiles)
+	r.cleaned = append(r.cleaned, id)
+
+	return r.markErr
 }
 
 // fakeStorage — хранилище, отдающее заранее заданный объект.

@@ -22,6 +22,7 @@ const (
 	headerCacheControl  = "Cache-Control"
 	headerETag          = "ETag"
 	headerIfNoneMatch   = "If-None-Match"
+	headerRetryAfter    = "Retry-After"
 
 	paramAvatarID = "avatar_id"
 	paramUserID   = "user_id"
@@ -53,6 +54,8 @@ const (
 	messageBadRequest    = "Bad request"
 	messageConflict      = "Avatar state changed"
 	messageTimeout       = "Request timeout"
+	messageTooMany       = "Too many requests"
+	messageUnavailable   = "Service temporarily unavailable"
 )
 
 // Ошибки транспорта: причины, по которым запрос не доходит до сервиса.
@@ -176,6 +179,9 @@ func (a *api) mapError(err error) (int, errorResponse) {
 		// Запись сменила состояние между чтением и записью: повтор запроса
 		// имеет смысл, а сервер здесь ни при чём.
 		return http.StatusConflict, errorResponse{Error: messageConflict}
+
+	case errors.Is(err, domain.ErrUnavailable):
+		return http.StatusServiceUnavailable, errorResponse{Error: messageUnavailable}
 
 	case errors.Is(err, context.DeadlineExceeded):
 		return http.StatusGatewayTimeout, errorResponse{Error: messageTimeout}

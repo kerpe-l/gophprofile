@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -192,7 +193,7 @@ func (c *Consumer) process(ctx context.Context, handler Handler, delivery amqp.D
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
-	err := handler(ctx, msg)
+	err := c.handle(ctx, handler, msg)
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
@@ -231,6 +232,29 @@ func (c *Consumer) process(ctx context.Context, handler Handler, delivery amqp.D
 		)
 		c.reroute(ctx, exchangeRetry, level.key, delivery, attempt)
 	}
+}
+
+// handle вызывает обработчик, перехватывая панику: паника на одном сообщении
+// не роняет процесс. Ошибка от паники повторяемая — отравленное сообщение
+// дойдёт до очереди мёртвых по лестнице повторов.
+func (c *Consumer) handle(ctx context.Context, handler Handler, msg Message) (err error) {
+	defer func() {
+		cause := recover()
+		if cause == nil {
+			return
+		}
+
+		c.log.ErrorContext(ctx, "panic in handler",
+			slog.Any("panic", cause),
+			slog.String("type", msg.Type),
+			slog.String("message_id", msg.MessageID),
+			slog.String("stack", string(debug.Stack())),
+		)
+
+		err = fmt.Errorf("handler panic: %v", cause)
+	}()
+
+	return handler(ctx, msg)
 }
 
 // reroute перекладывает сообщение в другую очередь и подтверждает исходное.

@@ -3,13 +3,21 @@ VERSION    ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo d
 BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 BIN_DIR    := bin
 
+K8S_CONTEXT   ?= rancher-desktop
+K8S_NAMESPACE ?= gophprofile
+ifeq ($(origin IMAGE_TAG),undefined)
+IMAGE_TAG := $(if $(findstring dirty,$(VERSION)),$(VERSION)-$(shell date -u +%Y%m%d%H%M%S),$(VERSION))
+endif
+CHART         := deploy/charts/gophprofile
+IMAGES        := server worker migrator
+
 LDFLAGS := -s -w \
 	-X $(MODULE)/internal/buildinfo.version=$(VERSION) \
 	-X $(MODULE)/internal/buildinfo.buildDate=$(BUILD_DATE)
 
 .PHONY: all build build-server build-worker build-migrator \
         run-server run-worker run-migrator \
-        docker-build up down logs \
+        docker-build up down logs k8s-images k8s-deploy \
         test test-integration lint fmt bench cover tidy clean
 
 all: lint test build
@@ -45,6 +53,21 @@ down:
 
 logs:
 	docker compose logs -f
+
+k8s-images:
+	@for img in $(IMAGES); do \
+		docker --context $(K8S_CONTEXT) build -f build/Dockerfile.$$img \
+			--build-arg VERSION=$(VERSION) --build-arg BUILD_DATE=$(BUILD_DATE) \
+			-t gophprofile-$$img:$(IMAGE_TAG) . || exit 1; \
+	done
+
+$(CHART)/values-dev.yaml:
+	$(error $@ not found: copy $(CHART)/values-dev.example.yaml and fill in the secrets)
+
+k8s-deploy: k8s-images $(CHART)/values-dev.yaml
+	helm upgrade --install gophprofile $(CHART) -n $(K8S_NAMESPACE) \
+		-f $(CHART)/values-dev.yaml \
+		$(foreach img,$(IMAGES),--set images.$(img).tag=$(IMAGE_TAG))
 
 test:
 	go test ./... -race

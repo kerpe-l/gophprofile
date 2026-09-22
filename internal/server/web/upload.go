@@ -39,11 +39,15 @@ var (
 )
 
 // UploadForm показывает форму загрузки. Владелец из query подставляется
-// в поле: после просмотра галереи в форму возвращаются с ним же.
+// в поле: после просмотра галереи в форму возвращаются с ним же. Владелец
+// от gateway query перекрывает.
 func (h *Handlers) UploadForm(w http.ResponseWriter, r *http.Request) {
-	userID := r.URL.Query().Get(paramUserID)
+	userID, fixed := trustedUserID(r)
+	if !fixed {
+		userID = r.URL.Query().Get(paramUserID)
+	}
 
-	h.render(w, r, http.StatusOK, h.pages.upload, h.newUploadView(userID, ""))
+	h.render(w, r, http.StatusOK, h.pages.upload, h.newUploadView(userID, fixed, ""))
 }
 
 // Upload принимает форму и уводит на галерею владельца. Редирект отвечает
@@ -55,7 +59,8 @@ func (h *Handlers) Upload(w http.ResponseWriter, r *http.Request) {
 		status, message := h.describeError(err)
 		h.logFailure(r, status, err)
 
-		h.render(w, r, status, h.pages.upload, h.newUploadView(userID, message))
+		_, fixed := trustedUserID(r)
+		h.render(w, r, status, h.pages.upload, h.newUploadView(userID, fixed, message))
 
 		return
 	}
@@ -63,8 +68,9 @@ func (h *Handlers) Upload(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, GalleryURL(userID), http.StatusSeeOther)
 }
 
-// accept разбирает форму и передаёт изображение сервису. Владелец
-// возвращается и при отказе — форму показывают заполненной.
+// accept разбирает форму и передаёт изображение сервису. Владелец берётся
+// из заголовка gateway, без него — из формы, и возвращается и при отказе —
+// форму показывают заполненной.
 func (h *Handlers) accept(r *http.Request) (string, error) {
 	if err := r.ParseMultipartForm(maxMultipartMemory); err != nil {
 		var tooLarge *http.MaxBytesError
@@ -77,9 +83,12 @@ func (h *Handlers) accept(r *http.Request) (string, error) {
 
 	defer h.removeTempFiles(r)
 
-	// Только тело формы: FormValue отдал бы предпочтение одноимённому
-	// параметру строки запроса.
-	userID := strings.TrimSpace(r.PostFormValue(paramUserID))
+	userID, fixed := trustedUserID(r)
+	if !fixed {
+		// Только тело формы: FormValue отдал бы предпочтение одноимённому
+		// параметру строки запроса.
+		userID = strings.TrimSpace(r.PostFormValue(paramUserID))
+	}
 
 	switch {
 	case userID == "":
@@ -134,4 +143,12 @@ func (h *Handlers) removeTempFiles(r *http.Request) {
 	if err := r.MultipartForm.RemoveAll(); err != nil {
 		h.log.WarnContext(r.Context(), "remove multipart temp files", slog.Any("error", err))
 	}
+}
+
+// trustedUserID возвращает владельца, проставленного gateway. Второй
+// результат равен false, если заголовка нет или он пуст.
+func trustedUserID(r *http.Request) (string, bool) {
+	userID := strings.TrimSpace(r.Header.Get(headerUserID))
+
+	return userID, userID != ""
 }

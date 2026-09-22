@@ -1,0 +1,34 @@
+# Локальный кластер: инфраструктура внутри, образы собраны в containerd кластера.
+# Скопировать в values-dev.yaml и заменить плейсхолдеры.
+# Логин и пароль в DATABASE_DSN — те же, что в POSTGRES_USER/POSTGRES_PASSWORD,
+# в AMQP_URL — что в RABBITMQ_DEFAULT_USER/RABBITMQ_DEFAULT_PASS.
+
+images:
+  pullPolicy: Never
+
+secrets:
+  create: true
+  values:
+    DATABASE_DSN: "postgres://gophprofile:<postgres-password>@db:5432/gophprofile?sslmode=disable"
+    S3_ACCESS_KEY: "<s3-access-key>"
+    S3_SECRET_KEY: "<s3-secret-key>"
+    AMQP_URL: "amqp://gophprofile:<rabbitmq-password>@rabbitmq:5672/"
+    POSTGRES_USER: gophprofile
+    POSTGRES_PASSWORD: "<postgres-password>"
+    POSTGRES_DB: gophprofile
+    RABBITMQ_DEFAULT_USER: gophprofile
+    RABBITMQ_DEFAULT_PASS: "<rabbitmq-password>"
+
+postgres:
+  enabled: true
+minio:
+  enabled: true
+rabbitmq:
+  enabled: true
+
+serviceMonitor:
+  enabled: true
+prometheusRule:
+  enabled: true
+dashboards:
+  enabled: true

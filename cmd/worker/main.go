@@ -140,6 +140,19 @@ func run() error {
 		}
 
 		err = fmt.Errorf("serve metrics on %s: %w", cfg.Worker.MetricsAddr, merr)
+	case <-ctx.Done():
+		log.Info("shutdown signal received")
+
+		// Дренаж ограничен общим таймаутом поверх пределов на отдельные
+		// сообщения: под должен освободить узел раньше SIGKILL.
+		select {
+		case cerr := <-consumeErr:
+			if cerr != nil {
+				err = fmt.Errorf("consume events: %w", cerr)
+			}
+		case <-time.After(cfg.Worker.ShutdownTimeout):
+			err = fmt.Errorf("drain messages: not finished within %s", cfg.Worker.ShutdownTimeout)
+		}
 	}
 
 	cancel()
@@ -161,10 +174,14 @@ func run() error {
 	return nil
 }
 
-// metricsServer — листенер, отдающий воркеру только /metrics.
+// metricsServer — листенер воркера: /metrics и liveness-проба /livez.
 func metricsServer(addr string, reg *prometheus.Registry) *http.Server {
 	mux := http.NewServeMux()
 	mux.Handle("GET /metrics", metrics.Handler(reg))
+	// Зависимости не проверяются: их отказ рестарт процесса не чинит.
+	mux.HandleFunc("GET /livez", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
 
 	return &http.Server{
 		Addr:              addr,
